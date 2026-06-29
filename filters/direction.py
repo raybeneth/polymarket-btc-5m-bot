@@ -1,0 +1,171 @@
+"""
+Filter 5 — Direction Strength
+
+Combines two independent signals into one direction score [-100, +100]:
+
+  Signal A — BTC Spot Momentum (65% weight)
+    Measures how strongly BTC spot price is moving over the last
+    DIRECTION_LOOKBACK_SECONDS window using a fast/slow MA crossover.
+    Fast MA window = 30s, Slow MA window = 90s.
+
+  Signal B — Polymarket Order Book Imbalance (35% weight)
+    Bid vs ask volume on the binary market's own book.
+    Net buying pressure on the ask side → bullish signal.
+
+Final direction:
+    score ≥  MIN_DIRECTION_SCORE → BULLISH  → buy YES token
+    score ≤ -MIN_DIRECTION_SCORE → BEARISH  → buy NO  token
+    |score| <  MIN_DIRECTION_SCORE → NEUTRAL → skip
+"""
+import time
+from feeds import btc_price
+from feeds.polymarket_clob import OrderBook
+from config import (
+    FilterResult,
+    DIRECTION_MIN_SCORE,
+    DIRECTION_FAST_WINDOW,
+    DIRECTION_SLOW_WINDOW,
+    DIRECTION_LOOKBACK_SECONDS,
+    DIRECTION_OB_WEIGHT,
+    DIRECTION_MOMENTUM_WEIGHT,
+)
+
+
+# ─────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────
+
+def _compute_momentum_score() -> tuple[float, dict]:
+    """
+    Fast/Slow MA crossover on BTC spot history.
+    Returns normalised score [-100, +100] and debug details.
+    """
+    now = time.time()
+    prices_raw = btc_price.get_prices_since(now - DIRECTION_LOOKBACK_SECONDS)
+
+    if len(prices_raw) < 5:
+        return 0.0, {"error": "not enough BTC price samples", "samples": len(prices_raw)}
+
+    # Fast MA: average over last FAST_WINDOW seconds
+    fast_cutoff = now - DIRECTION_FAST_WINDOW
+    slow_cutoff = now - DIRECTION_SLOW_WINDOW
+
+    fast_prices = [p for t, p in prices_raw if t >= fast_cutoff]
+    slow_prices = [p for t, p in prices_raw if t >= slow_cutoff]
+
+    if not fast_prices or not slow_prices:
+        return 0.0, {"error": "insufficient samples for MA windows"}
+
+    fast_ma = sum(fast_prices) / len(fast_prices)
+    slow_ma = sum(slow_prices) / len(slow_prices)
+
+    # Crossover as percentage of slow MA
+    # Positive = fast above slow = uptrend
+    crossover_pct = (fast_ma - slow_ma) / slow_ma * 100.0 if slow_ma > 0 else 0.0
+
+    # Also compute raw directional momentum (close-to-close over lookback)
+    oldest_price = prices_raw[0][1]
+    latest_price = prices_raw[-1][1]
+    total_move_pct = (latest_price - oldest_price) / oldest_price * 100.0
+
+    # Combine crossover and total move, cap at ±3% → ±100
+    combined_raw = 0.6 * crossover_pct + 0.4 * total_move_pct
+    score = max(-100.0, min(100.0, combined_raw / 3.0 * 100.0))
+
+    return score, {
+        "fast_ma": round(fast_ma, 2),
+        "slow_ma": round(slow_ma, 2),
+        "crossover_pct": round(crossover_pct, 4),
+        "total_move_pct": round(total_move_pct, 4),
+        "momentum_score": round(score, 1),
+        "samples": len(prices_raw),
+    }
+
+
+def _compute_ob_imbalance_score(yes_book: OrderBook, no_book: OrderBook) -> tuple[float, dict]:
+    """
+    Compare buy pressure between YES and NO books.
+    Returns score [-100, +100]:
+      +100 = all volume piling into YES asks (people buying YES) → bullish
+      -100 = all volume piling into NO asks  (people buying NO)  → bearish
+    """
+    yes_imb = yes_book.imbalance(levels=5)  # [-1, +1]
+    no_imb = no_book.imbalance(levels=5)    # [-1, +1]
+
+    # net = how much more YES is being bought than NO
+    net = yes_imb - no_imb  # range [-2, +2]
+    score = max(-100.0, min(100.0, net * 50.0))
+
+    return score, {
+        "yes_imbalance": round(yes_imb, 3),
+        "no_imbalance": round(no_imb, 3),
+        "net": round(net, 3),
+        "ob_score": round(score, 1),
+    }
+
+
+# ─────────────────────────────────────────────
+# Public filter entry point
+# ─────────────────────────────────────────────
+
+def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
+    """
+    Parameters
+    ----------
+    yes_book : OrderBook for the YES token of this market
+    no_book  : OrderBook for the NO  token of this market
+
+    Returns
+    -------
+    FilterResult
+        details["direction"] = "YES" | "NO" | "NEUTRAL"
+        details["score_raw"] = combined direction score [-100, +100]
+    """
+    momentum_score, momentum_details = _compute_momentum_score()
+    ob_score, ob_details = _compute_ob_imbalance_score(yes_book, no_book)
+
+    # Weighted combination
+    combined = (
+        DIRECTION_MOMENTUM_WEIGHT * momentum_score
+        + DIRECTION_OB_WEIGHT * ob_score
+    )
+
+    abs_score = abs(combined)
+    direction = "NEUTRAL"
+
+    if combined >= DIRECTION_MIN_SCORE:
+        direction = "YES"
+    elif combined <= -DIRECTION_MIN_SCORE:
+        direction = "NO"
+
+    if direction == "NEUTRAL":
+        return FilterResult(
+            passed=False,
+            score=abs_score,
+            reason=(
+                f"Direction too weak — combined={combined:.1f}, "
+                f"need |score| ≥ {DIRECTION_MIN_SCORE}"
+            ),
+            details={
+                "direction": "NEUTRAL",
+                "score_raw": round(combined, 1),
+                "momentum": momentum_details,
+                "orderbook": ob_details,
+            },
+        )
+
+    # Normalise abs_score to 0-100 filter score (MIN_DIRECTION_SCORE maps to 0)
+    # 100 maps to 100
+    filter_score = min(100.0, 100.0 * (abs_score - DIRECTION_MIN_SCORE) / (100.0 - DIRECTION_MIN_SCORE))
+
+    return FilterResult(
+        passed=True,
+        score=round(filter_score, 1),
+        reason=f"Direction {direction} — combined_score={combined:.1f}",
+        details={
+            "direction": direction,
+            "score_raw": round(combined, 1),
+            "momentum": momentum_details,
+            "orderbook": ob_details,
+        },
+    )
