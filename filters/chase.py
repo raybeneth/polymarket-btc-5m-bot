@@ -34,7 +34,7 @@ def check(book: OrderBook) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason="No asks in book — cannot assess chase space",
+            reason="订单簿无卖单 — 无法评估追单空间",
         )
 
     best_ask = book.best_ask
@@ -52,8 +52,8 @@ def check(book: OrderBook) -> FilterResult:
             passed=False,
             score=0.0,
             reason=(
-                f"Only {available_in_window:.0f} shares within chase window "
-                f"[{best_ask:.3f}, {chase_ceiling:.3f}] — need ≥{CHASE_MIN_FILL_SHARES}"
+                f"追单窗口 [{best_ask:.3f}, {chase_ceiling:.3f}] 内仅 {available_in_window:.0f} 股"
+                f" — 需要 ≥{CHASE_MIN_FILL_SHARES}"
             ),
             details={
                 "best_ask": best_ask,
@@ -76,8 +76,8 @@ def check(book: OrderBook) -> FilterResult:
         passed=True,
         score=round(score, 1),
         reason=(
-            f"Chase OK — {available_in_window:.0f} shares up to {chase_ceiling:.3f} "
-            f"({fill_ratio:.0%} fill coverage)"
+            f"追单空间充足 — {available_in_window:.0f} 股可用，上限 {chase_ceiling:.3f} "
+            f"(成交覆盖率 {fill_ratio:.0%})"
         ),
         details={
             "best_ask": best_ask,

@@ -56,10 +56,13 @@ ODDS_PREFERRED_MAX: float = 0.70
 #   score   ≥ MIN_DIRECTION_SCORE  →  bullish  → buy YES
 #   score   ≤ -MIN_DIRECTION_SCORE →  bearish  → buy NO
 #
-DIRECTION_MIN_SCORE: float = 35.0    # minimum abs momentum score to trade
+DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade
 DIRECTION_LOOKBACK_SECONDS: int = 120  # how far back to measure BTC momentum
 DIRECTION_FAST_WINDOW: int = 30        # short-term window (seconds) for fast MA
 DIRECTION_SLOW_WINDOW: int = 90        # long-term window (seconds) for slow MA
+
+# Direction smoothing: use average of recent scores over this window
+DIRECTION_SMOOTH_WINDOW: float = 12.0  # seconds to average direction scores over
 
 # Orderbook imbalance weight in combined direction score
 DIRECTION_OB_WEIGHT: float = 0.35     # 35% from orderbook imbalance
@@ -94,7 +97,7 @@ TIMING_ENTRY_CLOSE_AT: int = MARKET_DURATION_SECONDS - TIMING_MIN_REMAINING  # 2
 #
 SPREAD_MAX_ALLOWED: float = 0.04      # skip if spread > 4 cents
 SPREAD_WARN_THRESHOLD: float = 0.02   # above 2 cents → reduce score
-DEPTH_MIN_SHARES: float = 50.0        # minimum shares at best ask for our side
+DEPTH_MIN_SHARES: float = 30.0        # minimum shares at best ask for our side
 DEPTH_LEVELS_TO_CHECK: int = 5        # how many book levels to aggregate
 
 # Minimum bid/ask to even consider — avoids dead markets
@@ -116,7 +119,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 # TRADE SIZING
 # ──────────────────────────────────────────────
-TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade
+TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "3.0"))  # per trade
 MAX_CONCURRENT_POSITIONS: int = 1      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 10.0       # halt if daily P&L < -$10
 
@@ -151,7 +154,7 @@ SCORE_WEIGHTS: dict = {
     "spread":    0.15,
     "chase":     0.10,
 }
-MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade
+MIN_COMBINED_SCORE: float = 50.0      # minimum composite score to place trade
 
 
 @dataclass

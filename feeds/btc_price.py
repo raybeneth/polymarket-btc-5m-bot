@@ -8,10 +8,12 @@ import asyncio
 import json
 import logging
 import time
+import urllib.request
 from collections import deque
 from typing import Optional
 
 import websockets
+from websockets_proxy import Proxy, proxy_connect
 
 log = logging.getLogger(__name__)
 
@@ -59,22 +61,37 @@ def is_connected() -> bool:
 async def _run_feed() -> None:
     """
     Internal coroutine that maintains the Binance WebSocket connection.
-    Reconnects automatically on any error.
+    Reconnects automatically on any error. Uses system proxy if available.
     """
     global _latest_price, _connected
     backoff = 1.0
 
+    # Detect system proxy
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get("https") or proxies.get("http")
+
     while True:
         try:
-            log.info("Connecting to Binance BTC/USDT stream …")
-            async with websockets.connect(
-                _BINANCE_WS_URL,
-                ping_interval=20,
-                ping_timeout=10,
-            ) as ws:
+            log.info("正在连接币安 BTC/USDT 数据流 …")
+            if proxy_url:
+                proxy = Proxy.from_url(proxy_url)
+                ws_ctx = proxy_connect(
+                    _BINANCE_WS_URL,
+                    proxy=proxy,
+                    ping_interval=20,
+                    ping_timeout=10,
+                )
+            else:
+                ws_ctx = websockets.connect(
+                    _BINANCE_WS_URL,
+                    ping_interval=20,
+                    ping_timeout=10,
+                )
+
+            async with ws_ctx as ws:
                 _connected = True
                 backoff = 1.0
-                log.info("Binance WS connected.")
+                log.info("币安 WebSocket 已连接。")
 
                 async for raw in ws:
                     msg = json.loads(raw)
@@ -91,7 +108,7 @@ async def _run_feed() -> None:
 
         except Exception as exc:
             _connected = False
-            log.warning(f"Binance WS error: {exc}. Reconnecting in {backoff}s …")
+            log.warning(f"币安 WebSocket 错误: {exc}。将在 {backoff}s 后重连 …")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
@@ -105,7 +122,7 @@ async def start_feed() -> None:
     # Wait until first price arrives before returning
     for _ in range(100):
         if _latest_price is not None:
-            log.info(f"Initial BTC price received: ${_latest_price:,.2f}")
+            log.info(f"已收到初始BTC价格: ${_latest_price:,.2f}")
             return
         await asyncio.sleep(0.1)
-    log.warning("BTC price feed took too long to connect — proceeding anyway.")
+    log.warning("BTC价格数据流连接超时 — 继续运行。")

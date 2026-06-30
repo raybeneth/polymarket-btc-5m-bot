@@ -33,7 +33,7 @@ def check(book: OrderBook, intended_side: str) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason="Empty order book — no bid or ask",
+            reason="订单簿为空 — 无买单或卖单",
             details={},
         )
 
@@ -42,14 +42,14 @@ def check(book: OrderBook, intended_side: str) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Best bid {book.best_bid:.3f} below minimum {MIN_BID} — dead market",
+            reason=f"最佳买单 {book.best_bid:.3f} 低于最低要求 {MIN_BID} — 死盘",
             details={"best_bid": book.best_bid},
         )
     if book.best_ask < MIN_ASK:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Best ask {book.best_ask:.3f} below minimum {MIN_ASK} — dead market",
+            reason=f"最佳卖单 {book.best_ask:.3f} 低于最低要求 {MIN_ASK} — 死盘",
             details={"best_ask": book.best_ask},
         )
 
@@ -60,7 +60,7 @@ def check(book: OrderBook, intended_side: str) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Spread {spread:.4f} > max allowed {SPREAD_MAX_ALLOWED} — too wide",
+            reason=f"价差 {spread:.4f} > 最大允许值 {SPREAD_MAX_ALLOWED} — 过宽",
             details={"spread": spread, "bid": book.best_bid, "ask": book.best_ask},
         )
 
@@ -70,7 +70,7 @@ def check(book: OrderBook, intended_side: str) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Depth at best ask only {depth_at_ask:.0f} shares < min {DEPTH_MIN_SHARES}",
+            reason=f"最佳卖单深度仅 {depth_at_ask:.0f} 股 < 最低要求 {DEPTH_MIN_SHARES}",
             details={"depth_at_ask": depth_at_ask, "spread": spread},
         )
 
@@ -84,13 +84,13 @@ def check(book: OrderBook, intended_side: str) -> FilterResult:
 
     score = 0.6 * spread_score + 0.4 * depth_score
 
-    spread_warn = " [wide]" if spread > SPREAD_WARN_THRESHOLD else ""
+    spread_warn = " [偏宽]" if spread > SPREAD_WARN_THRESHOLD else ""
     return FilterResult(
         passed=True,
         score=round(score, 1),
         reason=(
-            f"Spread {spread:.4f}{spread_warn}, "
-            f"depth_at_ask={depth_at_ask:.0f} shares"
+            f"价差 {spread:.4f}{spread_warn}，"
+            f"卖单深度={depth_at_ask:.0f} 股"
         ),
         details={
             "spread": spread,

@@ -27,7 +27,7 @@ from config import (
     TradeDecision,
 )
 from feeds import btc_price
-from feeds.polymarket_clob import run_scanner, get_active_markets, fetch_both_books
+from feeds.polymarket_clob import run_scanner, get_active_markets, fetch_both_books, create_session
 from filters import odds, timing, spread, chase, direction
 from execution import order_manager
 from execution.risk import get_state
@@ -71,7 +71,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # ── Fetch order books ────────────────────────────────────────────
     yes_book, no_book = await fetch_both_books(session, market)
     if yes_book is None or no_book is None:
-        _log_skip(mid, market_id, "book_fetch", "Could not fetch order books from CLOB", {})
+        _log_skip(mid, market_id, "book_fetch", "无法从CLOB获取订单簿", {})
         return
 
     elapsed = market.elapsed_seconds
@@ -93,7 +93,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     entry_price = book.best_ask
 
     if entry_price is None:
-        _log_skip(mid, market_id, "direction", f"No ask price for {side} book", results)
+        _log_skip(mid, market_id, "direction", f"{side} 订单簿无卖单价格", results)
         return
 
     # ── Filter 2: Odds ───────────────────────────────────────────────
@@ -140,7 +140,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     )
 
     if combined_score < MIN_COMBINED_SCORE:
-        reason = f"Score too low: {combined_score:.1f} < {MIN_COMBINED_SCORE}"
+        reason = f"综合评分过低: {combined_score:.1f} < {MIN_COMBINED_SCORE}"
         _log_skip(mid, market_id, "score_gate", reason, filter_results)
         return
 
@@ -161,15 +161,15 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
     log.info("─" * 70)
     log.info(
-        f"[{mid}] ★ TRADE  {side:3s} @ {entry_price:.3f}  "
-        f"score={combined_score:.1f}  elapsed={elapsed:.0f}s remaining={remaining:.0f}s"
+        f"[{mid}] ★ 交易信号  {side:3s} @ {entry_price:.3f}  "
+        f"评分={combined_score:.1f}  已过={elapsed:.0f}s 剩余={remaining:.0f}s"
     )
-    log.info(f"  question : {market.question[:65]}")
-    log.info(f"  direction: {dir_result.reason}")
-    log.info(f"  odds     : {odds_result.reason}")
-    log.info(f"  timing   : {timing_result.reason}")
-    log.info(f"  spread   : {spread_result.reason}")
-    log.info(f"  chase    : {chase_result.reason}")
+    log.info(f"  问题    : {market.question[:65]}")
+    log.info(f"  方向    : {dir_result.reason}")
+    log.info(f"  赔率    : {odds_result.reason}")
+    log.info(f"  时机    : {timing_result.reason}")
+    log.info(f"  价差    : {spread_result.reason}")
+    log.info(f"  追单空间: {chase_result.reason}")
     log.info("─" * 70)
 
     filled = await order_manager.execute(decision)
@@ -205,14 +205,13 @@ def _log_skip(
 # ─────────────────────────────────────────────
 
 async def main_loop() -> None:
-    mode = "PAPER" if PAPER_TRADING else "LIVE"
-    log.info(f"Bot starting in {mode} mode …")
+    mode = "模拟" if PAPER_TRADING else "实盘"
+    log.info(f"机器人启动，当前模式: {mode} …")
 
     # Start BTC price feed
     await btc_price.start_feed()
 
-    connector = aiohttp.TCPConnector(limit=20)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    async with create_session() as session:
 
         # Start market scanner as background task
         asyncio.create_task(run_scanner(session), name="market_scanner")
@@ -220,7 +219,7 @@ async def main_loop() -> None:
         # Allow scanner first fetch to complete
         await asyncio.sleep(3.0)
 
-        log.info("Entering main evaluation loop …")
+        log.info("进入主评估循环 …")
         cycle = 0
 
         while True:
@@ -228,13 +227,15 @@ async def main_loop() -> None:
             markets = get_active_markets()
 
             if not markets:
-                log.info("No active BTC 5-min markets found — waiting …")
+                log.info("未找到活跃的BTC 5分钟市场 — 等待中 …")
                 await asyncio.sleep(5.0)
                 continue
 
             if cycle % 30 == 0:  # status every ~60s
                 state = get_state()
-                log.info(f"Status: {len(markets)} active markets | {state.summary()}")
+                log.info(f"状态: {len(markets)} 个活跃市场 | {state.summary()}")
+                if state.open_positions:
+                    log.info(f"当前持仓:\n{state.positions_summary()}")
 
             # Evaluate all markets concurrently
             tasks = [evaluate_market(session, m) for m in markets.values()]
@@ -254,13 +255,13 @@ async def main_loop() -> None:
 def main() -> None:
     setup_logging()
     log.info("=" * 60)
-    log.info("  Polymarket BTC 5-min Trading Bot")
+    log.info("  Polymarket BTC 5分钟交易机器人")
     log.info("=" * 60)
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
         state = get_state()
-        log.info(f"Shutting down. Final stats: {state.summary()}")
+        log.info(f"正在关闭。最终统计: {state.summary()}")
 
 
 if __name__ == "__main__":

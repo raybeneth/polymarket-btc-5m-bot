@@ -39,7 +39,7 @@ class RiskState:
     def _refresh_day(self) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != self._day_key:
-            log.info(f"New day {today} — resetting daily P&L (was {self.daily_pnl:+.2f})")
+            log.info(f"新的一天 {today} — 重置日盈亏（前值 {self.daily_pnl:+.2f}）")
             self.daily_pnl = 0.0
             self._day_key = today
             self.trades_today = 0
@@ -49,9 +49,9 @@ class RiskState:
     def can_trade(self) -> tuple[bool, str]:
         self._refresh_day()
         if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
-            return False, f"Already have {len(self.open_positions)} open position(s)"
+            return False, f"已有 {len(self.open_positions)} 个持仓"
         if self.daily_pnl <= -MAX_DAILY_LOSS_USD:
-            return False, f"Daily loss limit hit: {self.daily_pnl:.2f} USD"
+            return False, f"日亏损上限已触发: {self.daily_pnl:.2f} USD"
         return True, "OK"
 
     def record_open(self, position: OpenPosition) -> None:
@@ -70,9 +70,9 @@ class RiskState:
                 else:
                     self.losses_today += 1
                 log.info(
-                    f"Closed {pos.side} on {market_id[:12]}… "
-                    f"entry={pos.entry_price:.3f} exit={exit_price:.3f} "
-                    f"pnl={pnl:+.4f} daily_total={self.daily_pnl:+.4f}"
+                    f"平仓 {pos.side} {market_id[:12]}… "
+                    f"入场={pos.entry_price:.3f} 出场={exit_price:.3f} "
+                    f"盈亏={pnl:+.4f} 日累计={self.daily_pnl:+.4f}"
                 )
                 return pnl
         return None
@@ -85,9 +85,23 @@ class RiskState:
         l = self.losses_today
         wr = w / (w + l) * 100 if (w + l) > 0 else 0
         return (
-            f"Day {self._day_key} | trades={self.trades_today} "
-            f"W/L={w}/{l} ({wr:.0f}%) | PnL={self.daily_pnl:+.4f} USD"
+            f"日期 {self._day_key} | 交易={self.trades_today} "
+            f"胜/负={w}/{l} ({wr:.0f}%) | 盈亏={self.daily_pnl:+.4f} USD"
         )
+
+    def positions_summary(self) -> str:
+        """Return a formatted string of all open positions."""
+        if not self.open_positions:
+            return "无持仓"
+        lines = []
+        for pos in self.open_positions:
+            age = time.time() - pos.opened_at
+            lines.append(
+                f"  {pos.side:4s} {pos.market_id[:12]}… "
+                f"入场={pos.entry_price:.3f} 数量={pos.shares:.2f} "
+                f"持仓时间={age:.0f}s"
+            )
+        return "\n".join(lines)
 
 
 # Singleton accessible across the bot

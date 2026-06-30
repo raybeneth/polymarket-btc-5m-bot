@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:polymarket.com)",
+      "Bash(python backtest.py --days 1)",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"from execution.order_manager import execute, resolve_expired_positions; print\\('OK'\\)\")",
+      "Bash(python -c \"from filters import direction; print\\('OK'\\)\")"
+    ]
+  }
+}

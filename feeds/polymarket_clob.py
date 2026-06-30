@@ -12,16 +12,33 @@ order books); we poll the REST endpoint at ~2s intervals which is sufficient.
 """
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
+
+def _get_proxy_url() -> Optional[str]:
+    """Read system proxy from environment (set by Windows IE/registry settings)."""
+    import urllib.request
+    proxies = urllib.request.getproxies()
+    return proxies.get("https") or proxies.get("http")
+
+
+def create_session() -> aiohttp.ClientSession:
+    """Create an aiohttp session that respects system proxy settings."""
+    proxy_url = _get_proxy_url()
+    if proxy_url:
+        # aiohttp-socks supports http:// proxies too
+        connector = ProxyConnector.from_url(proxy_url)
+        return aiohttp.ClientSession(connector=connector)
+    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=20))
 
 from config import (
     GAMMA_HOST,
     POLYMARKET_HOST,
-    MARKET_KEYWORDS,
     MARKET_MIN_VOLUME_USD,
     SCANNER_POLL_INTERVAL,
     DEPTH_LEVELS_TO_CHECK,
@@ -128,75 +145,78 @@ def get_active_markets() -> dict[str, MarketInfo]:
 
 async def _fetch_active_markets(session: aiohttp.ClientSession) -> None:
     """
-    Pull active BTC 5-min markets from Gamma API and refresh the cache.
-    Gamma markets endpoint: GET /markets?active=true&closed=false&tag_slug=crypto
+    Find active BTC 5-min Up/Down markets from Gamma API.
+
+    Markets use the slug pattern: btc-updown-5m-{window_start_unix}
+    where window_start_unix is the Unix timestamp of the 5-min window start,
+    always a multiple of 300.  endDate = window_start + 300s.
+
+    We check the current window and a few surrounding ones so we catch markets
+    that are inside the entry window (45–210 s elapsed).
     """
     global _active_markets
+    from datetime import datetime, timezone
+    import json as _json
 
-    params = {
-        "active": "true",
-        "closed": "false",
-        "tag_slug": "crypto",
-        "limit": 100,
-    }
-    try:
-        async with session.get(
-            f"{GAMMA_HOST}/markets", params=params, timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-    except Exception as exc:
-        log.warning(f"Gamma market scan failed: {exc}")
-        return
+    now = time.time()
+    # Snap to the current 5-min boundary and check ±2 windows
+    base = int(now // 300) * 300
+    candidates = [base + offset * 300 for offset in (-1, 0, 1, 2)]
 
     found: dict[str, MarketInfo] = {}
-    markets_list = data if isinstance(data, list) else data.get("markets", [])
 
-    for m in markets_list:
-        question = m.get("question", "") or ""
-        # Must mention BTC and 5-minute
-        q_lower = question.lower()
-        if not any(k.lower() in q_lower for k in ["btc", "bitcoin"]):
-            continue
-        if not any(k.lower() in q_lower for k in ["5 min", "5min", "5-min"]):
-            continue
-
-        # Must have sufficient volume
-        volume = float(m.get("volume", 0) or 0)
-        if volume < MARKET_MIN_VOLUME_USD:
-            continue
-
-        # Extract token IDs (YES = index 0, NO = index 1 by convention)
-        tokens = m.get("tokens", [])
-        if len(tokens) < 2:
-            continue
-
-        yes_token = next((t for t in tokens if t.get("outcome", "").upper() == "YES"), tokens[0])
-        no_token = next((t for t in tokens if t.get("outcome", "").upper() == "NO"), tokens[1])
-
-        end_ts_str = m.get("endDate") or m.get("end_date_iso") or ""
-        if not end_ts_str:
-            continue
-
-        # Parse ISO timestamp
-        from datetime import datetime, timezone
+    for window_ts in candidates:
+        slug = f"btc-updown-5m-{window_ts}"
         try:
-            end_dt = datetime.fromisoformat(end_ts_str.replace("Z", "+00:00"))
-            end_ts = end_dt.timestamp()
+            async with session.get(
+                f"{GAMMA_HOST}/markets",
+                params={"slug": slug},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        except Exception as exc:
+            log.debug(f"Gamma接口请求失败 {slug}: {exc}")
+            continue
+
+        markets_list = data if isinstance(data, list) else data.get("markets", [])
+        if not markets_list:
+            continue
+
+        m = markets_list[0]
+
+        if m.get("closed") or not m.get("active", True):
+            continue
+
+        volume = float(m.get("volume") or 0)
+        if volume < MARKET_MIN_VOLUME_USD:
+            pass  # low volume markets still usable for paper trading
+
+        # Token IDs are in the JSON-encoded clobTokenIds field
+        # outcomes = ["Up", "Down"]  →  index 0 = Up (≡ YES), index 1 = Down (≡ NO)
+        try:
+            token_ids = _json.loads(m.get("clobTokenIds") or "[]")
         except Exception:
             continue
+        if len(token_ids) < 2:
+            continue
 
-        # Skip expired or just-created markets (< 10s remaining or < 10s elapsed)
-        remaining = end_ts - time.time()
-        if remaining <= 10 or remaining >= 290:
+        end_ts = window_ts + 300  # resolution time
+
+        # Skip if not yet in a tradeable window or already expired
+        remaining = end_ts - now
+        elapsed   = now - window_ts
+        if remaining <= 5 or elapsed < 0:
             continue
 
         market_id = m.get("conditionId") or m.get("id", "")
+        question  = m.get("question", slug)
+
         found[market_id] = MarketInfo(
             market_id=market_id,
             question=question,
-            yes_token_id=yes_token.get("token_id", ""),
-            no_token_id=no_token.get("token_id", ""),
+            yes_token_id=token_ids[0],   # "Up"   token
+            no_token_id=token_ids[1],    # "Down" token
             end_timestamp=end_ts,
             volume_usd=volume,
         )
@@ -205,7 +225,7 @@ async def _fetch_active_markets(session: aiohttp.ClientSession) -> None:
     still_active = {k: v for k, v in _active_markets.items() if v.is_active}
     still_active.update(found)
     _active_markets = still_active
-    log.debug(f"Market scan: {len(found)} new/updated, {len(_active_markets)} total active")
+    log.debug(f"市场扫描: {len(found)} 个新增/更新, {len(_active_markets)} 个活跃中")
 
 
 async def run_scanner(session: aiohttp.ClientSession) -> None:
@@ -242,7 +262,7 @@ async def fetch_order_book(
             resp.raise_for_status()
             data = await resp.json()
     except Exception as exc:
-        log.debug(f"Order book fetch failed for {token_id[:12]}…: {exc}")
+        log.debug(f"订单簿获取失败 {token_id[:12]}…: {exc}")
         return None
 
     def parse_levels(raw: list) -> list[BookLevel]:

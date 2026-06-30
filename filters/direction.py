@@ -12,12 +12,18 @@ Combines two independent signals into one direction score [-100, +100]:
     Bid vs ask volume on the binary market's own book.
     Net buying pressure on the ask side → bullish signal.
 
+Direction Smoothing:
+    Instead of acting on a single snapshot, we average the combined score
+    over DIRECTION_SMOOTH_WINDOW seconds. This filters out single-tick noise
+    while still allowing trades when direction is persistently biased.
+
 Final direction:
-    score ≥  MIN_DIRECTION_SCORE → BULLISH  → buy YES token
-    score ≤ -MIN_DIRECTION_SCORE → BEARISH  → buy NO  token
-    |score| <  MIN_DIRECTION_SCORE → NEUTRAL → skip
+    smoothed_score ≥  MIN_DIRECTION_SCORE → BULLISH  → buy YES token
+    smoothed_score ≤ -MIN_DIRECTION_SCORE → BEARISH  → buy NO  token
+    |smoothed_score| <  MIN_DIRECTION_SCORE → NEUTRAL → skip
 """
 import time
+from collections import deque
 from feeds import btc_price
 from feeds.polymarket_clob import OrderBook
 from config import (
@@ -28,7 +34,31 @@ from config import (
     DIRECTION_LOOKBACK_SECONDS,
     DIRECTION_OB_WEIGHT,
     DIRECTION_MOMENTUM_WEIGHT,
+    DIRECTION_SMOOTH_WINDOW,
 )
+
+
+# ─────────────────────────────────────────────
+# Direction score history for smoothing
+# ─────────────────────────────────────────────
+# Stores (timestamp, combined_score)
+_score_history: deque = deque(maxlen=100)
+
+
+def _get_smoothed_score(current_score: float, now: float) -> float:
+    """
+    Average combined scores over the smoothing window.
+    If not enough history, returns current_score as-is.
+    """
+    _score_history.append((now, current_score))
+
+    cutoff = now - DIRECTION_SMOOTH_WINDOW
+    recent_scores = [s for t, s in _score_history if t >= cutoff]
+
+    if len(recent_scores) < 2:
+        return current_score
+
+    return sum(recent_scores) / len(recent_scores)
 
 
 # ─────────────────────────────────────────────
@@ -124,18 +154,22 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
     momentum_score, momentum_details = _compute_momentum_score()
     ob_score, ob_details = _compute_ob_imbalance_score(yes_book, no_book)
 
-    # Weighted combination
+    # Weighted combination (instantaneous)
     combined = (
         DIRECTION_MOMENTUM_WEIGHT * momentum_score
         + DIRECTION_OB_WEIGHT * ob_score
     )
 
-    abs_score = abs(combined)
+    # Smooth over recent history to reduce noise
+    now = time.time()
+    smoothed = _get_smoothed_score(combined, now)
+
+    abs_score = abs(smoothed)
     direction = "NEUTRAL"
 
-    if combined >= DIRECTION_MIN_SCORE:
+    if smoothed >= DIRECTION_MIN_SCORE:
         direction = "YES"
-    elif combined <= -DIRECTION_MIN_SCORE:
+    elif smoothed <= -DIRECTION_MIN_SCORE:
         direction = "NO"
 
     if direction == "NEUTRAL":
@@ -143,12 +177,13 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
             passed=False,
             score=abs_score,
             reason=(
-                f"Direction too weak — combined={combined:.1f}, "
-                f"need |score| ≥ {DIRECTION_MIN_SCORE}"
+                f"方向信号过弱 — 综合={smoothed:.1f}，"
+                f"需要 |score| ≥ {DIRECTION_MIN_SCORE}"
             ),
             details={
                 "direction": "NEUTRAL",
-                "score_raw": round(combined, 1),
+                "score_raw": round(smoothed, 1),
+                "score_instant": round(combined, 1),
                 "momentum": momentum_details,
                 "orderbook": ob_details,
             },
@@ -161,10 +196,11 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
     return FilterResult(
         passed=True,
         score=round(filter_score, 1),
-        reason=f"Direction {direction} — combined_score={combined:.1f}",
+        reason=f"方向 {direction} — 综合评分={smoothed:.1f}",
         details={
             "direction": direction,
-            "score_raw": round(combined, 1),
+            "score_raw": round(smoothed, 1),
+            "score_instant": round(combined, 1),
             "momentum": momentum_details,
             "orderbook": ob_details,
         },

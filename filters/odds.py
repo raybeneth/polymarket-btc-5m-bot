@@ -39,7 +39,7 @@ def check(price: float) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Price {price:.3f} below minimum {ODDS_MIN_PRICE} — lottery odds",
+            reason=f"价格 {price:.3f} 低于最低值 {ODDS_MIN_PRICE} — 彩票赔率",
             details={"price": price},
         )
 
@@ -47,7 +47,7 @@ def check(price: float) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Price {price:.3f} above maximum {ODDS_MAX_PRICE} — no return",
+            reason=f"价格 {price:.3f} 高于最大值 {ODDS_MAX_PRICE} — 无收益空间",
             details={"price": price},
         )
 
@@ -80,6 +80,6 @@ def check(price: float) -> FilterResult:
     return FilterResult(
         passed=True,
         score=round(score, 1),
-        reason=f"Price {price:.3f} OK — implied_prob={price:.1%}, payout={payout:.2f}x",
+        reason=f"价格 {price:.3f} 合适 — 隐含概率={price:.1%}，赔付={payout:.2f}x",
         details={"price": price, "payout": payout},
     )

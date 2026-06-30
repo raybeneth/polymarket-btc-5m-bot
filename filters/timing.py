@@ -42,7 +42,7 @@ def check(elapsed_seconds: float, remaining_seconds: float) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Too early — only {elapsed:.0f}s elapsed, need ≥{TIMING_MIN_ELAPSED}s",
+            reason=f"时机过早 — 仅过去 {elapsed:.0f}s，需要 ≥{TIMING_MIN_ELAPSED}s",
             details={"elapsed": elapsed, "remaining": remaining},
         )
 
@@ -51,7 +51,7 @@ def check(elapsed_seconds: float, remaining_seconds: float) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Too late — only {remaining:.0f}s remaining, need ≥{TIMING_MIN_REMAINING}s",
+            reason=f"时机过晚 — 仅剩 {remaining:.0f}s，需要 ≥{TIMING_MIN_REMAINING}s",
             details={"elapsed": elapsed, "remaining": remaining},
         )
 
@@ -59,7 +59,7 @@ def check(elapsed_seconds: float, remaining_seconds: float) -> FilterResult:
         return FilterResult(
             passed=False,
             score=0.0,
-            reason=f"Too late — {elapsed:.0f}s elapsed exceeds max {TIMING_MAX_ELAPSED}s",
+            reason=f"时机过晚 — 已过 {elapsed:.0f}s 超过最大值 {TIMING_MAX_ELAPSED}s",
             details={"elapsed": elapsed, "remaining": remaining},
         )
 
@@ -75,6 +75,6 @@ def check(elapsed_seconds: float, remaining_seconds: float) -> FilterResult:
     return FilterResult(
         passed=True,
         score=round(score, 1),
-        reason=f"Timing OK — {elapsed:.0f}s elapsed, {remaining:.0f}s remaining",
+        reason=f"时机合适 — 已过 {elapsed:.0f}s，剩余 {remaining:.0f}s",
         details={"elapsed": elapsed, "remaining": remaining, "window_mid": window_mid},
     )

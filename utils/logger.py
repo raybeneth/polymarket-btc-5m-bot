@@ -1,21 +1,34 @@
 """
 Trade logger — appends trade records to a JSON-Lines file.
 Each line is one JSON object (easy to load with pandas or jq).
+
+positions.log — human-readable position log with entry/exit and P&L.
 """
 import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import colorlog
 
 from config import TRADE_LOG_FILE, LOG_LEVEL
 
+POSITION_LOG_FILE = "positions.log"
+
 
 def setup_logging() -> None:
     """Configure coloured console logging and a plain file handler."""
-    handler = colorlog.StreamHandler()
+    import sys
+    import io
+
+    # Force UTF-8 output on Windows console
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+    handler = colorlog.StreamHandler(stream=sys.stderr)
     handler.setFormatter(colorlog.ColoredFormatter(
         "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s %(name)s — %(message)s",
         datefmt="%H:%M:%S",
@@ -45,6 +58,36 @@ def log_trade(record: dict[str, Any]) -> None:
     record.setdefault("logged_at", time.time())
     with open(TRADE_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
+
+
+def log_position_open(order_id: str, market_id: str, side: str,
+                      entry_price: float, shares: float, score: float,
+                      mode: str) -> None:
+    """Log position open to positions.log."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    line = (
+        f"[{now}] 开仓 | 模式={mode} | 订单={order_id} | "
+        f"市场={market_id[:16]}… | 方向={side} | "
+        f"价格={entry_price:.4f} | 数量={shares:.2f} | 评分={score:.1f}\n"
+    )
+    with open(POSITION_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def log_position_close(order_id: str, market_id: str, side: str,
+                       entry_price: float, exit_price: float,
+                       shares: float, pnl: float, result: str,
+                       mode: str) -> None:
+    """Log position close with P&L to positions.log."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    line = (
+        f"[{now}] 平仓 | 模式={mode} | 订单={order_id} | "
+        f"市场={market_id[:16]}… | 方向={side} | "
+        f"入场={entry_price:.4f} | 出场={exit_price:.4f} | "
+        f"数量={shares:.2f} | 盈亏={pnl:+.4f} USD | 结果={result}\n"
+    )
+    with open(POSITION_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
 def load_trades() -> list[dict]:

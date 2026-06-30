@@ -132,7 +132,7 @@ TRADE_SIZE_USD=1.0
 # 日志级别
 LOG_LEVEL=INFO
 """
-        with open(env_path, "w") as f:
+        with open(env_path, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"已写入 {env_path}")
     else:

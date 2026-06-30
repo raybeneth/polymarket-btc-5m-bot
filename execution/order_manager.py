@@ -30,7 +30,7 @@ from config import (
     TradeDecision,
 )
 from execution.risk import OpenPosition, get_state
-from utils.logger import log_trade
+from utils.logger import log_trade, log_position_open, log_position_close
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     state = get_state()
     ok, reason = state.can_trade()
     if not ok:
-        log.warning(f"[PAPER] Risk block: {reason}")
+        log.warning(f"[模拟] 风控拦截: {reason}")
         return False
 
     simulated_fill_price = decision.entry_price + ORDER_PRICE_SLIPPAGE
@@ -88,11 +88,11 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     state.record_open(pos)
 
     log.info(
-        f"[PAPER] BUY {decision.side} | "
-        f"market={decision.market_id[:12]}… | "
-        f"price={simulated_fill_price:.4f} | "
-        f"shares={shares:.2f} | "
-        f"score={decision.combined_score:.1f}"
+        f"[模拟] 买入 {decision.side} | "
+        f"市场={decision.market_id[:12]}… | "
+        f"价格={simulated_fill_price:.4f} | "
+        f"数量={shares:.2f} | "
+        f"评分={decision.combined_score:.1f}"
     )
 
     log_trade({
@@ -108,6 +108,15 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         "filter_scores": {k: v.score for k, v in decision.filter_results.items()},
         "timestamp": time.time(),
     })
+    log_position_open(
+        order_id=order_id,
+        market_id=decision.market_id,
+        side=decision.side,
+        entry_price=simulated_fill_price,
+        shares=shares,
+        score=decision.combined_score,
+        mode="模拟",
+    )
     return True
 
 
@@ -120,7 +129,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
     state = get_state()
     ok, reason = state.can_trade()
     if not ok:
-        log.warning(f"[LIVE] Risk block: {reason}")
+        log.warning(f"[实盘] 风控拦截: {reason}")
         return False
 
     client = _get_clob_client()
@@ -130,9 +139,9 @@ async def _live_execute(decision: TradeDecision) -> bool:
     shares = round(TRADE_SIZE_USD / limit_price, 2)
 
     log.info(
-        f"[LIVE] Submitting BUY {decision.side} | "
-        f"token={decision.token_id[:12]}… | "
-        f"limit={limit_price:.4f} | shares={shares:.2f}"
+        f"[实盘] 提交买单 {decision.side} | "
+        f"代币={decision.token_id[:12]}… | "
+        f"限价={limit_price:.4f} | 数量={shares:.2f}"
     )
 
     try:
@@ -148,16 +157,16 @@ async def _live_execute(decision: TradeDecision) -> bool:
             lambda: client.create_and_post_order(order_args),
         )
     except Exception as exc:
-        log.error(f"[LIVE] Order submission failed: {exc}")
+        log.error(f"[实盘] 订单提交失败: {exc}")
         return False
 
     order_id = response.get("orderID") or response.get("id", "unknown")
-    log.info(f"[LIVE] Order submitted: {order_id}")
+    log.info(f"[实盘] 订单已提交: {order_id}")
 
     # Poll for fill or timeout
     filled_price = await _wait_for_fill(client, order_id, limit_price)
     if filled_price is None:
-        log.warning(f"[LIVE] Order {order_id} not filled in {ORDER_FILL_TIMEOUT_SECONDS}s — cancelling")
+        log.warning(f"[实盘] 订单 {order_id} 在 {ORDER_FILL_TIMEOUT_SECONDS}s 内未成交 — 正在撤单")
         await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(order_id))
         return False
 
@@ -185,6 +194,15 @@ async def _live_execute(decision: TradeDecision) -> bool:
         "filter_scores": {k: v.score for k, v in decision.filter_results.items()},
         "timestamp": time.time(),
     })
+    log_position_open(
+        order_id=order_id,
+        market_id=decision.market_id,
+        side=decision.side,
+        entry_price=filled_price,
+        shares=shares,
+        score=decision.combined_score,
+        mode="实盘",
+    )
     return True
 
 
@@ -220,9 +238,12 @@ async def resolve_expired_positions() -> None:
     Called periodically. Checks open positions whose market has expired
     and closes them at the settlement price (1.0 if won, 0.0 if lost).
 
-    In paper mode we use a simple heuristic; in live mode Polymarket
-    settles automatically and we just update our local state.
+    In paper mode we use BTC price change during the market window to determine
+    the outcome (Up = BTC price went up, Down = BTC price went down).
+    In live mode Polymarket settles automatically and we just update our local state.
     """
+    from feeds import btc_price
+
     state = get_state()
     now = time.time()
 
@@ -232,14 +253,42 @@ async def resolve_expired_positions() -> None:
         if age < 360:
             continue
 
-        # In paper mode, we don't know the outcome — log as unknown
-        # In live mode, query the CLOB for the resolved price
         if PAPER_TRADING:
+            # Determine outcome from BTC price movement during the 5-min window
+            # The market window started ~5min before the position's market expired
+            # Use the BTC prices we have: price at entry vs price 5 min later
+            price_at_entry = btc_price.get_price_n_seconds_ago(int(age))
+            price_at_end = btc_price.get_price_n_seconds_ago(int(age - 300))
+
+            if price_at_entry is not None and price_at_end is not None:
+                btc_went_up = price_at_end >= price_at_entry
+                # side "YES" = bought Up token, side "NO" = bought Down token
+                won = (pos.side == "YES" and btc_went_up) or (pos.side == "NO" and not btc_went_up)
+                exit_price = 1.0 if won else 0.0
+                outcome_str = "UP" if btc_went_up else "DOWN"
+                result_str = "WIN" if won else "LOSS"
+            else:
+                # Not enough price history — assume breakeven
+                exit_price = 0.5
+                outcome_str = "unknown"
+                result_str = "unknown"
+
+            pnl = state.record_close(pos.market_id, exit_price)
             log.info(
-                f"[PAPER] Position {pos.order_id} expired (age={age:.0f}s) "
-                f"— outcome unknown in paper mode"
+                f"[模拟] 仓位 {pos.order_id} 已结算 — "
+                f"BTC={outcome_str} 方向={pos.side} 结果={result_str} 盈亏={pnl:+.4f}"
             )
-            state.record_close(pos.market_id, exit_price=0.5)  # assume breakeven
+            log_position_close(
+                order_id=pos.order_id,
+                market_id=pos.market_id,
+                side=pos.side,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                shares=pos.shares,
+                pnl=pnl if pnl is not None else 0.0,
+                result=result_str,
+                mode="模拟",
+            )
         else:
             try:
                 client = _get_clob_client()
@@ -251,8 +300,20 @@ async def resolve_expired_positions() -> None:
                 exit_price = float(trades.get("price", 0.5))
                 pnl = state.record_close(pos.market_id, exit_price)
                 log.info(
-                    f"[LIVE] Closed expired position {pos.order_id} "
-                    f"@ {exit_price:.3f} pnl={pnl:+.4f}"
+                    f"[实盘] 已平仓过期仓位 {pos.order_id} "
+                    f"@ {exit_price:.3f} 盈亏={pnl:+.4f}"
+                )
+                result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
+                log_position_close(
+                    order_id=pos.order_id,
+                    market_id=pos.market_id,
+                    side=pos.side,
+                    entry_price=pos.entry_price,
+                    exit_price=exit_price,
+                    shares=pos.shares,
+                    pnl=pnl if pnl is not None else 0.0,
+                    result=result_str,
+                    mode="实盘",
                 )
             except Exception as exc:
-                log.warning(f"Could not resolve position {pos.order_id}: {exc}")
+                log.warning(f"无法结算仓位 {pos.order_id}: {exc}")
