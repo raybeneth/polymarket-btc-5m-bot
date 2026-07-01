@@ -55,7 +55,7 @@ class Dashboard:
         self._positions: list = []
         self._logs: deque = deque(maxlen=_MAX_LOG_LINES)
 
-        # Historical stats (loaded once from positions.log)
+        # Historical stats (loaded once from MySQL via storage.db.get_stats)
         self._hist_total_trades: int = 0
         self._hist_wins: int = 0
         self._hist_losses: int = 0
@@ -64,7 +64,7 @@ class Dashboard:
     # ── Public API ──────────────────────────────
 
     def load_history(self, history: dict) -> None:
-        """Load historical stats from positions.log parse result."""
+        """Load historical stats (dict from storage.db.get_stats)."""
         self._hist_total_trades = history.get("total_trades", 0)
         self._hist_wins = history.get("wins", 0)
         self._hist_losses = history.get("losses", 0)

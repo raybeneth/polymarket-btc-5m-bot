@@ -33,6 +33,7 @@ from config import (
     TradeDecision,
 )
 from execution.risk import OpenPosition, get_state
+from storage import db
 from utils.logger import log_trade, log_position_open, log_position_close
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,13 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         f"score={decision.combined_score:.1f} {order_id}"
     )
 
+    await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: db.insert_open(
+            pos, "paper", TRADE_SIZE_USD, decision.combined_score,
+            {k: v.score for k, v in decision.filter_results.items()},
+        ),
+    )
     log_trade({
         "mode": "paper",
         "order_id": order_id,
@@ -185,6 +193,13 @@ async def _live_execute(decision: TradeDecision) -> bool:
     )
     state.record_open(pos)
 
+    await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: db.insert_open(
+            pos, "live", TRADE_SIZE_USD, decision.combined_score,
+            {k: v.score for k, v in decision.filter_results.items()},
+        ),
+    )
     log_trade({
         "mode": "live",
         "order_id": order_id,
@@ -240,9 +255,11 @@ async def execute(decision: TradeDecision) -> bool:
 async def check_early_exits(session) -> None:
     """
     Check open positions for stop-loss / take-profit / force-exit triggers.
-    Fetches current orderbook for each held token and compares best_bid
-    against entry_price +/- delta thresholds. Also forces exit when
-    remaining time before market settlement <= FORCE_EXIT_BEFORE_EXPIRY.
+    Fetches current orderbook for each held token. The trigger judgment uses
+    the book's mid-price (not raw best_bid) so a single-sided/stale best_bid
+    quote can't fire the stop on its own; the actual exit fill still uses
+    best_bid since that's the price we could realistically sell at. Also
+    forces exit when remaining time before market settlement <= FORCE_EXIT_BEFORE_EXPIRY.
     """
     from feeds.polymarket_clob import fetch_order_book
 
@@ -256,6 +273,7 @@ async def check_early_exits(session) -> None:
             continue
 
         best_bid = book.best_bid
+        trigger_price = book.mid if book.mid is not None else best_bid
         stop_delta = pos.entry_price * STOP_LOSS_RATIO
         stop_price = pos.entry_price - stop_delta
         tp_price = pos.entry_price + TAKE_PROFIT_DELTA
@@ -268,9 +286,9 @@ async def check_early_exits(session) -> None:
         )
 
         exit_reason = None
-        if best_bid <= stop_price:
+        if trigger_price <= stop_price:
             exit_reason = "STOP_LOSS"
-        elif best_bid >= tp_price:
+        elif trigger_price >= tp_price:
             exit_reason = "TAKE_PROFIT"
         elif force_exit:
             exit_reason = "FORCE_EXIT"
@@ -287,6 +305,9 @@ async def check_early_exits(session) -> None:
                 f"EXIT {exit_reason} {pos.side} "
                 f"{pos.entry_price:.3f}->{exit_price:.3f} "
                 f"pnl={pnl:+.2f} hold={hold_time}s {pos.order_id}"
+            )
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: db.close_position(pos.order_id, exit_price, exit_reason)
             )
             result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
             log_position_close(
@@ -318,6 +339,9 @@ async def check_early_exits(session) -> None:
                 log.info(
                     f"[实盘] {exit_reason} 触发 | {pos.order_id} | "
                     f"卖出 @ {exit_price:.3f} 盈亏={pnl:+.4f}"
+                )
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: db.close_position(pos.order_id, exit_price, exit_reason)
                 )
                 result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
                 log_position_close(
@@ -394,6 +418,9 @@ async def resolve_expired_positions() -> None:
                 f"{pos.entry_price:.3f}->{exit_price:.1f} "
                 f"BTC={outcome_str} pnl={pnl:+.2f} {pos.order_id}"
             )
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: db.close_position(pos.order_id, exit_price, "SETTLE")
+            )
             log_position_close(
                 order_id=pos.order_id,
                 market_id=pos.market_id,
@@ -418,6 +445,9 @@ async def resolve_expired_positions() -> None:
                 log.info(
                     f"[实盘] 已平仓过期仓位 {pos.order_id} "
                     f"@ {exit_price:.3f} 盈亏={pnl:+.4f}"
+                )
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: db.close_position(pos.order_id, exit_price, "SETTLE")
                 )
                 result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
                 log_position_close(

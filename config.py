@@ -27,6 +27,19 @@ CHAIN_ID: int = 137  # Polygon mainnet
 # ──────────────────────────────────────────────
 PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+
+# ──────────────────────────────────────────────
+# MYSQL — position storage
+# ──────────────────────────────────────────────
+MYSQL_HOST: str = os.getenv("MYSQL_HOST", "192.168.0.103")
+MYSQL_PORT: int = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot")
+
+# Local file backup of trade/position records (MySQL is the source of truth
+# for stats/PnL; these files are kept only for manual inspection/debugging).
 TRADE_LOG_FILE: str = "trades.jsonl"
 
 
@@ -94,7 +107,7 @@ DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
 #
 MARKET_DURATION_SECONDS: int = 300    # total market length
 
-TIMING_MIN_ELAPSED: int = 40          # must have at least 40s of market history
+TIMING_MIN_ELAPSED: int = 70          # must have at least 70s of market history (was 40 — raised so direction signal has more time to mature before entry)
 TIMING_MAX_ELAPSED: int = 210         # never enter after 3m30s elapsed
 TIMING_MIN_REMAINING: int = 90        # must have ≥90s left when we enter
 TIMING_MAX_REMAINING: int = 250       # don't enter in the first 40s (< this = too early)

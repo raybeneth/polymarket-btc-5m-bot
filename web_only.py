@@ -1,7 +1,7 @@
 """
 Standalone web dashboard — no trading, just monitoring.
 
-Reads historical data from positions.log and serves the dashboard.
+Reads historical data from MySQL and serves the dashboard.
 Useful for reviewing past performance without running the bot.
 
 Usage: python web_only.py
@@ -10,16 +10,18 @@ import asyncio
 import logging
 import time
 
-from utils.logger import setup_logging, attach_web_logger, load_position_history
+from storage import db
+from utils.logger import setup_logging, attach_web_logger
 from web import server as web_server
 
 log = logging.getLogger(__name__)
 
 
 async def run() -> None:
-    history = load_position_history()
+    await asyncio.get_event_loop().run_in_executor(None, db.init_schema)
+    history = await asyncio.get_event_loop().run_in_executor(None, db.get_stats)
     log.info(
-        f"History loaded: {history['total_trades']} trades, "
+        f"历史记录已加载: 共{history['total_trades']}笔, "
         f"W={history['wins']} L={history['losses']} "
         f"PnL={history['total_pnl']:+.2f}"
     )
@@ -55,11 +57,11 @@ async def run() -> None:
 def main() -> None:
     setup_logging()
     attach_web_logger()
-    log.info("Web-only mode — no trading, dashboard only")
+    log.info("仅 Web 模式 — 不进行交易，仅展示控制台")
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
-        log.info("Shutdown")
+        log.info("已关闭")
 
 
 if __name__ == "__main__":

@@ -6,3 +6,5 @@ colorlog>=6.8.0
 rich>=13.0.0
 websockets_proxy
 aiohttp_socks
+pymysql>=1.1.0
+dbutils>=3.0.0

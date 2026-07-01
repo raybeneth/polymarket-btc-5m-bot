@@ -64,7 +64,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
 
     _ws_clients.add(ws)
-    log.info(f"WebSocket client connected ({len(_ws_clients)} total)")
+    log.info(f"WebSocket 客户端已连接 (共{len(_ws_clients)}个)")
 
     # Send initial snapshot
     try:
@@ -78,7 +78,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
             pass  # we don't expect messages from the client
     finally:
         _ws_clients.discard(ws)
-        log.info(f"WebSocket client disconnected ({len(_ws_clients)} total)")
+        log.info(f"WebSocket 客户端已断开 (共{len(_ws_clients)}个)")
 
     return ws
 
@@ -132,4 +132,4 @@ async def start_web_server() -> None:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", _WEB_PORT)
     await site.start()
-    log.info(f"Web dashboard running at http://localhost:{_WEB_PORT}")
+    log.info(f"Web 控制台已运行于 http://localhost:{_WEB_PORT}")

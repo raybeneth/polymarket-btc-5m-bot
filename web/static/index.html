@@ -159,6 +159,20 @@
     padding: 24px !important;
   }
 
+  /* Position history */
+  .history-container {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  .history-container::-webkit-scrollbar { width: 6px; }
+  .history-container::-webkit-scrollbar-track { background: var(--bg); }
+  .history-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .history-container thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
   /* Log area */
   .log-container {
     height: 340px;
@@ -257,6 +271,27 @@
       <tr><td colspan="7" class="empty-row">No open positions</td></tr>
     </tbody>
   </table>
+</div>
+
+<!-- Position History -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-title">Position History</span>
+    <span style="color:var(--text-dim);font-size:11px" id="histCount">0</span>
+  </div>
+  <div class="history-container" id="historyContainer">
+    <table class="positions-table">
+      <thead>
+        <tr>
+          <th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th>
+          <th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th>
+        </tr>
+      </thead>
+      <tbody id="histBody">
+        <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <!-- Logs -->
@@ -360,6 +395,36 @@ function render(d) {
         <td style="color:var(--text-dim);font-size:11px">${p.order_id}</td>
       </tr>`;
     }).join('');
+  }
+
+  // Position history (newest first)
+  const history = d.history || [];
+  $('histCount').textContent = history.length;
+  const histBody = $('histBody');
+  if (history.length === 0) {
+    histBody.innerHTML = '<tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>';
+  } else {
+    const historyContainer = $('historyContainer');
+    const prevScroll = historyContainer.scrollTop;
+    histBody.innerHTML = history.map(h => {
+      const cls = h.side === 'YES' ? 'side-yes' : 'side-no';
+      const arrow = h.side === 'YES' ? '&#9650;' : '&#9660;';
+      const pnlCls = h.pnl >= 0 ? 'positive' : 'negative';
+      const resultCls = h.result === 'WIN' ? 'positive' : h.result === 'LOSS' ? 'negative' : 'neutral';
+      return `<tr>
+        <td class="${cls}">${arrow} ${h.side}</td>
+        <td>${h.entry.toFixed(3)}</td>
+        <td>${h.exit != null ? h.exit.toFixed(3) : '--'}</td>
+        <td>${h.qty.toFixed(2)}</td>
+        <td>${h.hold}s</td>
+        <td class="${pnlCls}">${h.pnl >= 0 ? '+' : ''}${h.pnl.toFixed(4)}</td>
+        <td class="${resultCls}">${h.result || '--'}</td>
+        <td style="color:var(--text-dim)">${h.reason || ''}</td>
+        <td>${h.closed_ago}s ago</td>
+        <td style="color:var(--text-dim);font-size:11px">${h.order_id}</td>
+      </tr>`;
+    }).join('');
+    historyContainer.scrollTop = prevScroll;
   }
 
   // Logs

@@ -1,20 +1,19 @@
 """
-Trade logger — appends trade records to a JSON-Lines file.
-Each line is one JSON object (easy to load with pandas or jq).
+Logging setup — coloured console output + plain bot.log file.
 
-positions.log — human-readable position log with entry/exit and P&L.
+MySQL (see storage/db.py) is the source of truth for position records and
+stats. trades.jsonl / positions.log below are a local backup only, written
+alongside the DB writes, for manual inspection/debugging.
 """
 import json
 import logging
-import os
-import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 import colorlog
 
-from config import TRADE_LOG_FILE, LOG_LEVEL
+from config import LOG_LEVEL, TRADE_LOG_FILE
 
 POSITION_LOG_FILE = "positions.log"
 
@@ -63,7 +62,7 @@ def attach_web_logger() -> None:
 
 
 def log_trade(record: dict[str, Any]) -> None:
-    """Append one trade record to the JSONL file."""
+    """Append one trade record to the JSONL backup file."""
     record.setdefault("logged_at", time.time())
     with open(TRADE_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
@@ -72,7 +71,7 @@ def log_trade(record: dict[str, Any]) -> None:
 def log_position_open(order_id: str, market_id: str, side: str,
                       entry_price: float, shares: float, score: float,
                       mode: str) -> None:
-    """Log position open to positions.log."""
+    """Log position open to positions.log (backup)."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = (
         f"[{now}] 开仓 | 模式={mode} | 订单={order_id} | "
@@ -87,7 +86,7 @@ def log_position_close(order_id: str, market_id: str, side: str,
                        entry_price: float, exit_price: float,
                        shares: float, pnl: float, result: str,
                        mode: str) -> None:
-    """Log position close with P&L to positions.log."""
+    """Log position close with P&L to positions.log (backup)."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = (
         f"[{now}] 平仓 | 模式={mode} | 订单={order_id} | "
@@ -97,71 +96,3 @@ def log_position_close(order_id: str, market_id: str, side: str,
     )
     with open(POSITION_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line)
-
-
-def load_trades() -> list[dict]:
-    """Read all trades from the log file. Returns empty list if file missing."""
-    if not os.path.exists(TRADE_LOG_FILE):
-        return []
-    trades = []
-    with open(TRADE_LOG_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    trades.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return trades
-
-
-def load_position_history() -> dict:
-    """
-    Parse positions.log to compute historical stats.
-
-    Returns dict with:
-        total_trades, wins, losses, total_pnl,
-        today_trades, today_wins, today_losses, today_pnl,
-    """
-    result = {
-        "total_trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0,
-        "today_trades": 0, "today_wins": 0, "today_losses": 0, "today_pnl": 0.0,
-    }
-    if not os.path.exists(POSITION_LOG_FILE):
-        return result
-
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    pnl_pattern = re.compile(r"盈亏=([+-]?\d+\.?\d*)\s*USD")
-    result_pattern = re.compile(r"结果=(\S+)")
-
-    with open(POSITION_LOG_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "平仓" not in line:
-                continue
-
-            pnl_match = pnl_pattern.search(line)
-            result_match = result_pattern.search(line)
-            if not pnl_match:
-                continue
-
-            pnl = float(pnl_match.group(1))
-            res = result_match.group(1) if result_match else ""
-            is_win = "WIN" in res
-
-            result["total_trades"] += 1
-            result["total_pnl"] += pnl
-            if is_win:
-                result["wins"] += 1
-            else:
-                result["losses"] += 1
-
-            if today_str in line[:30]:
-                result["today_trades"] += 1
-                result["today_pnl"] += pnl
-                if is_win:
-                    result["today_wins"] += 1
-                else:
-                    result["today_losses"] += 1
-
-    return result

@@ -35,7 +35,8 @@ from feeds.polymarket_clob import run_scanner, get_active_markets, fetch_both_bo
 from filters import odds, timing, spread, chase, direction
 from execution import order_manager
 from execution.risk import get_state
-from utils.logger import setup_logging, attach_web_logger, load_position_history
+from storage import db
+from utils.logger import setup_logging, attach_web_logger
 from web import server as web_server
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ _traded_markets: set[str] = set()
 # Historical stats (loaded once at startup)
 _history: dict = {}
 _start_time: float = 0.0
+
+# Most recently closed positions, newest first (refreshed each loop cycle)
+_recent_closed: list = []
 
 
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
@@ -61,7 +65,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
     yes_book, no_book = await fetch_both_books(session, market)
     if yes_book is None or no_book is None:
-        log.info(f"[{mid}] skip book: fetch failed")
+        log.info(f"[{mid}] 跳过: 订单簿获取失败")
         return
 
     elapsed = market.elapsed_seconds
@@ -70,44 +74,44 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # Filter 1: Direction
     dir_result = direction.check(yes_book, no_book)
     if not dir_result.passed:
-        log.info(f"[{mid}] skip direction: signal weak ({dir_result.details.get('score_raw', 0):.0f})")
+        log.info(f"[{mid}] 跳过方向: 信号过弱 ({dir_result.details.get('score_raw', 0):.0f})")
         return
     if dir_result.score < MIN_DIRECTION_FILTER_SCORE:
-        log.info(f"[{mid}] skip dir_floor: {dir_result.score:.0f} < {MIN_DIRECTION_FILTER_SCORE:.0f}")
+        log.info(f"[{mid}] 跳过方向下限: {dir_result.score:.0f} < {MIN_DIRECTION_FILTER_SCORE:.0f}")
         return
 
     side = dir_result.details["direction"]
     book = yes_book if side == "YES" else no_book
     entry_price = book.best_ask
     if entry_price is None:
-        log.info(f"[{mid}] skip: {side} no ask price")
+        log.info(f"[{mid}] 跳过: {side} 无卖一价")
         return
 
     # Filter 2: Odds
     odds_result = odds.check(entry_price, direction_strength=dir_result.score)
     if not odds_result.passed:
-        log.info(f"[{mid}] skip odds: price {entry_price:.3f} rejected")
+        log.info(f"[{mid}] 跳过赔率: 价格 {entry_price:.3f} 被拒绝")
         return
 
     # Filter 3: Timing
     timing_result = timing.check(elapsed, remaining)
     if not timing_result.passed:
-        log.info(f"[{mid}] skip timing: elapsed={elapsed:.0f}s remaining={remaining:.0f}s")
+        log.info(f"[{mid}] 跳过时机: 已过{elapsed:.0f}s 剩余{remaining:.0f}s")
         return
     if timing_result.score < MIN_TIMING_FILTER_SCORE:
-        log.info(f"[{mid}] skip time_floor: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
+        log.info(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
     # Filter 4: Spread
     spread_result = spread.check(book, side)
     if not spread_result.passed:
-        log.info(f"[{mid}] skip spread: {spread_result.reason}")
+        log.info(f"[{mid}] 跳过价差: {spread_result.reason}")
         return
 
     # Filter 5: Chase
     chase_result = chase.check(book)
     if not chase_result.passed:
-        log.info(f"[{mid}] skip chase: {chase_result.reason}")
+        log.info(f"[{mid}] 跳过追单: {chase_result.reason}")
         return
 
     # Combined score
@@ -119,7 +123,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         SCORE_WEIGHTS[name] * result.score for name, result in filter_results.items()
     )
     if combined_score < MIN_COMBINED_SCORE:
-        log.info(f"[{mid}] skip score: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
+        log.info(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
         return
 
     # TRADE SIGNAL
@@ -179,18 +183,37 @@ def _build_web_state() -> dict:
             "pnl": round(_history.get("total_pnl", 0.0), 4),
         },
         "positions": positions,
+        "history": [
+            {
+                "side": h["side"],
+                "mode": h["mode"],
+                "entry": h["entry_price"],
+                "exit": h["exit_price"],
+                "qty": h["shares"],
+                "pnl": round(h["pnl"], 4),
+                "result": h["result"],
+                "reason": h["exit_reason"],
+                "hold": int(h["closed_at"] - h["opened_at"]) if h["closed_at"] and h["opened_at"] else 0,
+                "closed_ago": int(now - h["closed_at"]) if h["closed_at"] else 0,
+                "order_id": h["order_id"],
+            }
+            for h in _recent_closed
+        ],
         "uptime": int(now - _start_time),
     }
 
 
 async def main_loop() -> None:
-    global _history, _start_time
+    global _history, _start_time, _recent_closed
     _start_time = time.time()
 
-    # Load historical stats
-    _history = load_position_history()
+    loop = asyncio.get_event_loop()
+
+    # Ensure the positions table exists, then load historical stats via SQL
+    await loop.run_in_executor(None, db.init_schema)
+    _history = await loop.run_in_executor(None, db.get_stats)
     log.info(
-        f"History loaded: {_history['total_trades']} trades, "
+        f"历史记录已加载: 共{_history['total_trades']}笔, "
         f"W={_history['wins']} L={_history['losses']} "
         f"PnL={_history['total_pnl']:+.2f}"
     )
@@ -202,6 +225,13 @@ async def main_loop() -> None:
     state.losses_today = _history.get("today_losses", 0)
     state.daily_pnl = _history.get("today_pnl", 0.0)
 
+    # Restore any positions still OPEN in the DB (e.g. after a restart)
+    state.open_positions = await loop.run_in_executor(None, db.load_open_positions)
+    if state.open_positions:
+        log.info(f"已从 MySQL 恢复 {len(state.open_positions)} 个未平仓仓位")
+
+    _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, 50)
+
     # Start web server
     await web_server.start_web_server()
 
@@ -211,7 +241,7 @@ async def main_loop() -> None:
     async with create_session() as session:
         asyncio.create_task(run_scanner(session), name="market_scanner")
         await asyncio.sleep(3.0)
-        log.info("main loop started")
+        log.info("主循环已启动")
 
         while True:
             markets = get_active_markets()
@@ -227,8 +257,9 @@ async def main_loop() -> None:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await order_manager.check_early_exits(session)
                 await order_manager.resolve_expired_positions()
+                _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, 50)
             except (ConnectionResetError, aiohttp.ClientError, OSError) as exc:
-                log.warning(f"network error, skipping cycle: {exc}")
+                log.warning(f"网络异常，跳过本轮循环: {exc}")
 
             # Update web dashboard
             # Re-compute all_time to include new trades from this session
@@ -269,7 +300,7 @@ def main() -> None:
     attach_web_logger()
 
     mode = "PAPER" if PAPER_TRADING else "LIVE"
-    log.info(f"Polymarket BTC 5min Bot starting ({mode} mode)")
+    log.info(f"Polymarket BTC 5分钟机器人启动中 ({mode} 模式)")
 
     try:
         asyncio.run(main_loop())
@@ -278,7 +309,7 @@ def main() -> None:
         w, l = state.wins_today, state.losses_today
         wr = w / (w + l) * 100 if (w + l) > 0 else 0
         log.info(
-            f"Shutdown | trades={state.trades_today} "
+            f"已关闭 | 交易数={state.trades_today} "
             f"W={w} L={l} ({wr:.0f}%) | PnL={state.daily_pnl:+.2f} USD"
         )
 
