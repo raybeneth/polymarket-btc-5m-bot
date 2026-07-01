@@ -3,5 +3,6 @@ aiohttp>=3.9.0
 websockets>=12.0
 python-dotenv>=1.0.0
 colorlog>=6.8.0
+rich>=13.0.0
 websockets_proxy
 aiohttp_socks

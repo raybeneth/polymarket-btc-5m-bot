@@ -1,0 +1,14 @@
+Collecting rich
+  Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+     -------------------------------------- 310.7/310.7 kB 1.6 MB/s eta 0:00:00
+Collecting markdown-it-py>=2.2.0
+  Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+     ---------------------------------------- 91.7/91.7 kB 5.1 MB/s eta 0:00:00
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in c:\users\think\appdata\local\programs\python\python311\lib\site-packages (from rich) (2.20.0)
+Collecting mdurl~=0.1
+  Using cached mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Installing collected packages: mdurl, markdown-it-py, rich
+Successfully installed markdown-it-py-4.2.0 mdurl-0.1.2 rich-15.0.0
+
+[notice] A new release of pip available: 22.3.1 -> 26.1.2
+[notice] To update, run: python.exe -m pip install --upgrade pip

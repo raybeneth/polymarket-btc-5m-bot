@@ -43,14 +43,34 @@ _DEFAULT_HEADERS = {
 
 
 def create_session() -> aiohttp.ClientSession:
-    """Create an aiohttp session that respects system proxy settings."""
+    """Create an aiohttp session that respects system proxy settings.
+
+    Connection hardening for long-running bots on Windows:
+      - enable_cleanup_closed=True: silently discard reset connections instead
+        of raising ConnectionResetError inside ProactorEventLoop callbacks.
+      - keepalive_timeout=15: close idle connections before the server does.
+      - force_close=True on proxy connector: prevents stale tunnel reuse.
+    """
     proxy_url = _get_proxy_url()
+    timeout = aiohttp.ClientTimeout(total=10, connect=5)
     if proxy_url:
-        # aiohttp-socks supports http:// proxies too
-        connector = ProxyConnector.from_url(proxy_url)
-        return aiohttp.ClientSession(connector=connector, headers=_DEFAULT_HEADERS)
+        connector = ProxyConnector.from_url(
+            proxy_url,
+            limit=20,
+            enable_cleanup_closed=True,
+            force_close=True,
+        )
+        return aiohttp.ClientSession(
+            connector=connector, headers=_DEFAULT_HEADERS, timeout=timeout,
+        )
     return aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=20), headers=_DEFAULT_HEADERS
+        connector=aiohttp.TCPConnector(
+            limit=20,
+            enable_cleanup_closed=True,
+            keepalive_timeout=15,
+        ),
+        headers=_DEFAULT_HEADERS,
+        timeout=timeout,
     )
 
 from config import (
@@ -248,7 +268,10 @@ async def _fetch_active_markets(session: aiohttp.ClientSession) -> None:
 async def run_scanner(session: aiohttp.ClientSession) -> None:
     """Background task: refresh market list every SCANNER_POLL_INTERVAL seconds."""
     while True:
-        await _fetch_active_markets(session)
+        try:
+            await _fetch_active_markets(session)
+        except (ConnectionResetError, aiohttp.ClientError, OSError) as exc:
+            log.warning(f"市场扫描网络异常，将在下轮重试: {exc}")
         await asyncio.sleep(SCANNER_POLL_INTERVAL)
 
 

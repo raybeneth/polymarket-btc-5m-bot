@@ -7,6 +7,7 @@ positions.log — human-readable position log with entry/exit and P&L.
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -51,6 +52,14 @@ def setup_logging() -> None:
         "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
     ))
     root.addHandler(fh)
+
+
+def attach_web_logger() -> None:
+    """Attach web log handler so log lines are pushed to the web dashboard."""
+    from web.server import WebLogHandler
+    handler = WebLogHandler()
+    handler.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+    logging.getLogger().addHandler(handler)
 
 
 def log_trade(record: dict[str, Any]) -> None:
@@ -104,3 +113,55 @@ def load_trades() -> list[dict]:
                 except json.JSONDecodeError:
                     pass
     return trades
+
+
+def load_position_history() -> dict:
+    """
+    Parse positions.log to compute historical stats.
+
+    Returns dict with:
+        total_trades, wins, losses, total_pnl,
+        today_trades, today_wins, today_losses, today_pnl,
+    """
+    result = {
+        "total_trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0,
+        "today_trades": 0, "today_wins": 0, "today_losses": 0, "today_pnl": 0.0,
+    }
+    if not os.path.exists(POSITION_LOG_FILE):
+        return result
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pnl_pattern = re.compile(r"盈亏=([+-]?\d+\.?\d*)\s*USD")
+    result_pattern = re.compile(r"结果=(\S+)")
+
+    with open(POSITION_LOG_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or "平仓" not in line:
+                continue
+
+            pnl_match = pnl_pattern.search(line)
+            result_match = result_pattern.search(line)
+            if not pnl_match:
+                continue
+
+            pnl = float(pnl_match.group(1))
+            res = result_match.group(1) if result_match else ""
+            is_win = "WIN" in res
+
+            result["total_trades"] += 1
+            result["total_pnl"] += pnl
+            if is_win:
+                result["wins"] += 1
+            else:
+                result["losses"] += 1
+
+            if today_str in line[:30]:
+                result["today_trades"] += 1
+                result["today_pnl"] += pnl
+                if is_win:
+                    result["today_wins"] += 1
+                else:
+                    result["today_losses"] += 1
+
+    return result

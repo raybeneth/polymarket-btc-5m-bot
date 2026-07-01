@@ -41,7 +41,7 @@ TRADE_LOG_FILE: str = "trades.jsonl"
 #   PREFERRED range gets a score bonus
 #
 ODDS_MIN_PRICE: float = 0.20   # below this: skip (implied prob <20% = lotto)
-ODDS_MAX_PRICE: float = 0.78   # hard ceiling: never buy above this, even on max conviction
+ODDS_MAX_PRICE: float = 0.72   # hard ceiling: never buy above this, even on max conviction
 ODDS_PREFERRED_MIN: float = 0.30
 ODDS_PREFERRED_MAX: float = 0.70
 
@@ -65,9 +65,9 @@ ODDS_DYN_MAX_WEAK: float = 0.60   # acceptable ceiling when direction strength =
 #   score   ≤ -MIN_DIRECTION_SCORE →  bearish  → buy NO
 #
 DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade
-DIRECTION_LOOKBACK_SECONDS: int = 120  # how far back to measure BTC momentum
-DIRECTION_FAST_WINDOW: int = 30        # short-term window (seconds) for fast MA
-DIRECTION_SLOW_WINDOW: int = 90        # long-term window (seconds) for slow MA
+DIRECTION_LOOKBACK_SECONDS: int = 180  # how far back to measure BTC momentum
+DIRECTION_FAST_WINDOW: int = 45        # short-term window (seconds) for fast MA
+DIRECTION_SLOW_WINDOW: int = 120       # long-term window (seconds) for slow MA
 
 # Volatility-adaptive momentum normalisation.
 # The raw momentum (a % move) is divided by the recent realised volatility
@@ -77,7 +77,7 @@ DIRECTION_VOL_SIGMA_FULL: float = 2.5  # combined move of this many horizon-sigm
 DIRECTION_VOL_FLOOR_PCT: float = 0.02  # min volatility scale (%) — guards flat-tape divide-by-zero
 
 # Direction smoothing: use average of recent scores over this window
-DIRECTION_SMOOTH_WINDOW: float = 12.0  # seconds to average direction scores over
+DIRECTION_SMOOTH_WINDOW: float = 20.0  # seconds to average direction scores over
 
 # Orderbook imbalance weight in combined direction score
 DIRECTION_OB_WEIGHT: float = 0.35     # 35% from orderbook imbalance
@@ -134,7 +134,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 # TRADE SIZING
 # ──────────────────────────────────────────────
-TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "3.0"))  # per trade
+TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 10.0       # halt if daily P&L < -$10
 
@@ -142,6 +142,20 @@ MAX_DAILY_LOSS_USD: float = 10.0       # halt if daily P&L < -$10
 # ──────────────────────────────────────────────
 # ORDER EXECUTION
 # ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# STOP-LOSS / TAKE-PROFIT (mid-market exit)
+# ──────────────────────────────────────────────
+# Monitor token best_bid during hold period.
+# Exit early if price moves against us (stop-loss) or in our favour (take-profit).
+# Stop-loss uses a ratio of entry price (dynamic):
+#   entry 0.45 → delta=0.09, stop at 0.36
+#   entry 0.55 → delta=0.11, stop at 0.44
+#   entry 0.65 → delta=0.13, stop at 0.52
+STOP_LOSS_RATIO: float = 0.20         # sell if best_bid <= entry_price * (1 - ratio)
+TAKE_PROFIT_DELTA: float = 0.15       # sell if best_bid >= entry_price + 0.15
+FORCE_EXIT_BEFORE_EXPIRY: int = 30    # force exit when ≤30s remain before market settlement
+
+
 ORDER_TYPE: str = "GTC"               # Good Till Cancel (we cancel manually if stale)
 ORDER_FILL_TIMEOUT_SECONDS: int = 8   # cancel unfilled order after 8s
 ORDER_PRICE_SLIPPAGE: float = 0.02    # place limit at best_ask + 2 cents
@@ -163,13 +177,15 @@ MARKET_MIN_VOLUME_USD: float = 100.0  # skip markets with too little volume
 # Trade only fires if final score >= MIN_COMBINED_SCORE.
 #
 SCORE_WEIGHTS: dict = {
-    "odds":      0.25,
+    "odds":      0.20,
     "direction": 0.35,
-    "timing":    0.15,
-    "spread":    0.15,
+    "timing":    0.25,
+    "spread":    0.10,
     "chase":     0.10,
 }
-MIN_COMBINED_SCORE: float = 50.0      # minimum composite score to place trade
+MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade
+MIN_DIRECTION_FILTER_SCORE: float = 15.0  # hard floor: direction score < 15 → skip regardless of combined
+MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
 
 
 @dataclass

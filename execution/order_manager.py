@@ -27,6 +27,9 @@ from config import (
     TRADE_SIZE_USD,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
+    STOP_LOSS_RATIO,
+    TAKE_PROFIT_DELTA,
+    FORCE_EXIT_BEFORE_EXPIRY,
     TradeDecision,
 )
 from execution.risk import OpenPosition, get_state
@@ -88,12 +91,11 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     )
     state.record_open(pos)
 
+    side_icon = "^" if decision.side == "YES" else "v"
     log.info(
-        f"[模拟] 买入 {decision.side} | "
-        f"市场={decision.market_id[:12]}… | "
-        f"价格={simulated_fill_price:.4f} | "
-        f"数量={shares:.2f} | "
-        f"评分={decision.combined_score:.1f}"
+        f"OPEN {side_icon} {decision.side} @ {simulated_fill_price:.3f} "
+        f"qty={shares:.2f} ${TRADE_SIZE_USD:.0f} "
+        f"score={decision.combined_score:.1f} {order_id}"
     )
 
     log_trade({
@@ -235,6 +237,104 @@ async def execute(decision: TradeDecision) -> bool:
     return await _live_execute(decision)
 
 
+async def check_early_exits(session) -> None:
+    """
+    Check open positions for stop-loss / take-profit / force-exit triggers.
+    Fetches current orderbook for each held token and compares best_bid
+    against entry_price +/- delta thresholds. Also forces exit when
+    remaining time before market settlement <= FORCE_EXIT_BEFORE_EXPIRY.
+    """
+    from feeds.polymarket_clob import fetch_order_book
+
+    state = get_state()
+    if not state.open_positions:
+        return
+
+    for pos in list(state.open_positions):
+        book = await fetch_order_book(session, pos.token_id)
+        if book is None or book.best_bid is None:
+            continue
+
+        best_bid = book.best_bid
+        stop_delta = pos.entry_price * STOP_LOSS_RATIO
+        stop_price = pos.entry_price - stop_delta
+        tp_price = pos.entry_price + TAKE_PROFIT_DELTA
+
+        # Check force exit before expiry
+        now = time.time()
+        force_exit = (
+            pos.market_end_ts > 0
+            and (pos.market_end_ts - now) <= FORCE_EXIT_BEFORE_EXPIRY
+        )
+
+        exit_reason = None
+        if best_bid <= stop_price:
+            exit_reason = "STOP_LOSS"
+        elif best_bid >= tp_price:
+            exit_reason = "TAKE_PROFIT"
+        elif force_exit:
+            exit_reason = "FORCE_EXIT"
+
+        if exit_reason is None:
+            continue
+
+        exit_price = best_bid
+
+        if PAPER_TRADING:
+            pnl = state.record_close(pos.market_id, exit_price)
+            hold_time = int(time.time() - pos.opened_at)
+            log.info(
+                f"EXIT {exit_reason} {pos.side} "
+                f"{pos.entry_price:.3f}->{exit_price:.3f} "
+                f"pnl={pnl:+.2f} hold={hold_time}s {pos.order_id}"
+            )
+            result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
+            log_position_close(
+                order_id=pos.order_id,
+                market_id=pos.market_id,
+                side=pos.side,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                shares=pos.shares,
+                pnl=pnl if pnl is not None else 0.0,
+                result=f"{result_str}({exit_reason})",
+                mode="模拟",
+            )
+        else:
+            try:
+                client = _get_clob_client()
+                from py_clob_client.clob_types import OrderArgs
+                sell_args = OrderArgs(
+                    token_id=pos.token_id,
+                    price=round(best_bid, 4),
+                    size=round(pos.shares, 2),
+                    side="SELL",
+                )
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: client.create_and_post_order(sell_args),
+                )
+                pnl = state.record_close(pos.market_id, exit_price)
+                log.info(
+                    f"[实盘] {exit_reason} 触发 | {pos.order_id} | "
+                    f"卖出 @ {exit_price:.3f} 盈亏={pnl:+.4f}"
+                )
+                result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
+                log_position_close(
+                    order_id=pos.order_id,
+                    market_id=pos.market_id,
+                    side=pos.side,
+                    entry_price=pos.entry_price,
+                    exit_price=exit_price,
+                    shares=pos.shares,
+                    pnl=pnl if pnl is not None else 0.0,
+                    result=f"{result_str}({exit_reason})",
+                    mode="实盘",
+                )
+            except Exception as exc:
+                log.warning(f"[实盘] {exit_reason} 卖出失败 {pos.order_id}: {exc}")
+
+
 async def resolve_expired_positions() -> None:
     """
     Called periodically. Checks open positions whose market has expired
@@ -290,8 +390,9 @@ async def resolve_expired_positions() -> None:
 
             pnl = state.record_close(pos.market_id, exit_price)
             log.info(
-                f"[模拟] 仓位 {pos.order_id} 已结算 — "
-                f"BTC={outcome_str} 方向={pos.side} 结果={result_str} 盈亏={pnl:+.4f}"
+                f"SETTLE {result_str} {pos.side} "
+                f"{pos.entry_price:.3f}->{exit_price:.1f} "
+                f"BTC={outcome_str} pnl={pnl:+.2f} {pos.order_id}"
             )
             log_position_close(
                 order_id=pos.order_id,
