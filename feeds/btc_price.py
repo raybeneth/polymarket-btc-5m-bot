@@ -54,6 +54,27 @@ def get_price_n_seconds_ago(seconds: int) -> Optional[float]:
     return candidates[-1][1]
 
 
+def get_price_at(target_ts: float, tolerance: float = 30.0) -> Optional[float]:
+    """
+    Return the price sample closest to absolute timestamp `target_ts`.
+
+    Unlike `get_price_n_seconds_ago` (which is relative to now), this looks up
+    an absolute point in time — needed for settling a market against its own
+    open/close window (market_end_ts - 300 .. market_end_ts).
+
+    Returns None if no sample lies within `tolerance` seconds of the target
+    (e.g. the target predates our rolling buffer).
+    """
+    best: Optional[tuple[float, float]] = None
+    best_dist = tolerance
+    for t, p in _price_history:
+        dist = abs(t - target_ts)
+        if dist <= best_dist:
+            best_dist = dist
+            best = (t, p)
+    return best[1] if best is not None else None
+
+
 def is_connected() -> bool:
     return _connected
 

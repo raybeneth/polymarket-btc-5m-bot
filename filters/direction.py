@@ -23,6 +23,7 @@ Final direction:
     |smoothed_score| <  MIN_DIRECTION_SCORE → NEUTRAL → skip
 """
 import time
+import math
 from collections import deque
 from feeds import btc_price
 from feeds.polymarket_clob import OrderBook
@@ -35,6 +36,8 @@ from config import (
     DIRECTION_OB_WEIGHT,
     DIRECTION_MOMENTUM_WEIGHT,
     DIRECTION_SMOOTH_WINDOW,
+    DIRECTION_VOL_SIGMA_FULL,
+    DIRECTION_VOL_FLOOR_PCT,
 )
 
 
@@ -65,10 +68,39 @@ def _get_smoothed_score(current_score: float, now: float) -> float:
 # Internal helpers
 # ─────────────────────────────────────────────
 
+def _realised_vol_pct(prices_raw: list[tuple[float, float]]) -> float:
+    """
+    Estimate realised volatility (in %) of the BTC tape over the sample window,
+    expressed at the same horizon as the momentum move (the full lookback span).
+
+    We take tick-to-tick log returns, compute their standard deviation, then
+    scale by sqrt(N) to turn per-tick sigma into the volatility of the whole
+    lookback move. This is the natural denominator for the move: a move of
+    1 horizon-sigma is "ordinary", several sigma is a real directional push.
+    """
+    prices = [p for _, p in prices_raw if p > 0]
+    if len(prices) < 3:
+        return DIRECTION_VOL_FLOOR_PCT
+
+    rets = [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices))]
+    n = len(rets)
+    mean = sum(rets) / n
+    var = sum((r - mean) ** 2 for r in rets) / n
+    per_tick_sigma = math.sqrt(var)
+
+    # Aggregate per-tick sigma to the full-window horizon, convert to %.
+    horizon_sigma_pct = per_tick_sigma * math.sqrt(n) * 100.0
+    return max(horizon_sigma_pct, DIRECTION_VOL_FLOOR_PCT)
+
+
 def _compute_momentum_score() -> tuple[float, dict]:
     """
     Fast/Slow MA crossover on BTC spot history.
     Returns normalised score [-100, +100] and debug details.
+
+    Normalisation is volatility-adaptive: the raw momentum (a % move) is
+    divided by the recent realised volatility rather than a fixed % threshold,
+    so the signal stays calibrated across calm and violent regimes.
     """
     now = time.time()
     prices_raw = btc_price.get_prices_since(now - DIRECTION_LOOKBACK_SECONDS)
@@ -98,15 +130,22 @@ def _compute_momentum_score() -> tuple[float, dict]:
     latest_price = prices_raw[-1][1]
     total_move_pct = (latest_price - oldest_price) / oldest_price * 100.0
 
-    # Combine crossover and total move, cap at ±3% → ±100
-    combined_raw = 0.6 * crossover_pct + 0.4 * total_move_pct
-    score = max(-100.0, min(100.0, combined_raw / 3.0 * 100.0))
+    # Combine crossover and total move into a single % move signal
+    combined_move_pct = 0.6 * crossover_pct + 0.4 * total_move_pct
+
+    # Volatility-adaptive scaling: full scale = SIGMA_FULL horizon-sigmas.
+    vol_pct = _realised_vol_pct(prices_raw)
+    full_scale_pct = DIRECTION_VOL_SIGMA_FULL * vol_pct
+    score = max(-100.0, min(100.0, combined_move_pct / full_scale_pct * 100.0))
 
     return score, {
         "fast_ma": round(fast_ma, 2),
         "slow_ma": round(slow_ma, 2),
         "crossover_pct": round(crossover_pct, 4),
         "total_move_pct": round(total_move_pct, 4),
+        "combined_move_pct": round(combined_move_pct, 4),
+        "vol_pct": round(vol_pct, 4),
+        "full_scale_pct": round(full_scale_pct, 4),
         "momentum_score": round(score, 1),
         "samples": len(prices_raw),
     }

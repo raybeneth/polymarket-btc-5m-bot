@@ -41,9 +41,17 @@ TRADE_LOG_FILE: str = "trades.jsonl"
 #   PREFERRED range gets a score bonus
 #
 ODDS_MIN_PRICE: float = 0.20   # below this: skip (implied prob <20% = lotto)
-ODDS_MAX_PRICE: float = 0.80   # above this: skip (payout too small)
+ODDS_MAX_PRICE: float = 0.78   # hard ceiling: never buy above this, even on max conviction
 ODDS_PREFERRED_MIN: float = 0.30
 ODDS_PREFERRED_MAX: float = 0.70
+
+# Direction-adaptive price ceiling.
+# The effective max acceptable price scales with direction strength [0,100]:
+#   weak direction   → only cheap prices allowed (ODDS_DYN_MAX_WEAK)
+#   strong direction → up to the hard ceiling   (ODDS_MAX_PRICE)
+# This stops mid-conviction trades from chasing expensive prices (low payout)
+# while still letting genuinely strong signals pay up.
+ODDS_DYN_MAX_WEAK: float = 0.60   # acceptable ceiling when direction strength = 0
 
 
 # ──────────────────────────────────────────────
@@ -60,6 +68,13 @@ DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade
 DIRECTION_LOOKBACK_SECONDS: int = 120  # how far back to measure BTC momentum
 DIRECTION_FAST_WINDOW: int = 30        # short-term window (seconds) for fast MA
 DIRECTION_SLOW_WINDOW: int = 90        # long-term window (seconds) for slow MA
+
+# Volatility-adaptive momentum normalisation.
+# The raw momentum (a % move) is divided by the recent realised volatility
+# instead of a fixed % threshold, so the signal stays meaningful in both
+# calm and violent regimes. full_scale = SIGMA_FULL * realised_horizon_vol.
+DIRECTION_VOL_SIGMA_FULL: float = 2.5  # combined move of this many horizon-sigmas → ±100
+DIRECTION_VOL_FLOOR_PCT: float = 0.02  # min volatility scale (%) — guards flat-tape divide-by-zero
 
 # Direction smoothing: use average of recent scores over this window
 DIRECTION_SMOOTH_WINDOW: float = 12.0  # seconds to average direction scores over
@@ -79,10 +94,10 @@ DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
 #
 MARKET_DURATION_SECONDS: int = 300    # total market length
 
-TIMING_MIN_ELAPSED: int = 45          # must have at least 45s of market history
+TIMING_MIN_ELAPSED: int = 40          # must have at least 40s of market history
 TIMING_MAX_ELAPSED: int = 210         # never enter after 3m30s elapsed
 TIMING_MIN_REMAINING: int = 90        # must have ≥90s left when we enter
-TIMING_MAX_REMAINING: int = 255       # don't enter in the first 45s (< this = too early)
+TIMING_MAX_REMAINING: int = 250       # don't enter in the first 40s (< this = too early)
 
 # Derived helpers (do not change)
 TIMING_ENTRY_OPEN_AT: int = MARKET_DURATION_SECONDS - TIMING_MAX_REMAINING   # 45s
@@ -120,7 +135,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # TRADE SIZING
 # ──────────────────────────────────────────────
 TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "3.0"))  # per trade
-MAX_CONCURRENT_POSITIONS: int = 1      # only 1 open position at a time
+MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 10.0       # halt if daily P&L < -$10
 
 
@@ -180,6 +195,7 @@ class TradeDecision:
     entry_price: float    # best ask for our side
     combined_score: float
     filter_results: dict  # name → FilterResult
+    market_end_ts: float = 0.0  # market resolution time (unix s), for settlement
     skip_reason: Optional[str] = None
 
     def __str__(self) -> str:

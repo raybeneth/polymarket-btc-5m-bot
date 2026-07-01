@@ -25,6 +25,7 @@ class OpenPosition:
     shares: float
     opened_at: float     # unix timestamp
     order_id: str
+    market_end_ts: float = 0.0  # market resolution time (unix s); 0 = unknown (legacy)
 
 
 @dataclass

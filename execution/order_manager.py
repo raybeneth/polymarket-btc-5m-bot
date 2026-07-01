@@ -84,6 +84,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         shares=shares,
         opened_at=time.time(),
         order_id=order_id,
+        market_end_ts=decision.market_end_ts,
     )
     state.record_open(pos)
 
@@ -178,6 +179,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
         shares=shares,
         opened_at=time.time(),
         order_id=order_id,
+        market_end_ts=decision.market_end_ts,
     )
     state.record_open(pos)
 
@@ -248,20 +250,33 @@ async def resolve_expired_positions() -> None:
     now = time.time()
 
     for pos in list(state.open_positions):
-        # Heuristic: if position has been open for >6 minutes, market is done
-        age = now - pos.opened_at
-        if age < 360:
-            continue
+        # Settle once the market's own resolution time has passed (plus a small
+        # buffer so the close-price tick has arrived). Fall back to the age
+        # heuristic only for legacy positions with no recorded end timestamp.
+        if pos.market_end_ts > 0:
+            if now < pos.market_end_ts + 5:
+                continue
+        else:
+            age = now - pos.opened_at
+            if age < 360:
+                continue
 
         if PAPER_TRADING:
-            # Determine outcome from BTC price movement during the 5-min window
-            # The market window started ~5min before the position's market expired
-            # Use the BTC prices we have: price at entry vs price 5 min later
-            price_at_entry = btc_price.get_price_n_seconds_ago(int(age))
-            price_at_end = btc_price.get_price_n_seconds_ago(int(age - 300))
+            # Determine outcome from BTC movement over the MARKET's own window,
+            # not the position's age: [market_end_ts - 300, market_end_ts].
+            # This is the same window Polymarket settles on, regardless of when
+            # within the window we actually entered.
+            if pos.market_end_ts > 0:
+                btc_open = btc_price.get_price_at(pos.market_end_ts - 300)
+                btc_close = btc_price.get_price_at(pos.market_end_ts)
+            else:
+                # Legacy fallback: approximate via position age
+                age = now - pos.opened_at
+                btc_open = btc_price.get_price_n_seconds_ago(int(age))
+                btc_close = btc_price.get_price_n_seconds_ago(int(max(0, age - 300)))
 
-            if price_at_entry is not None and price_at_end is not None:
-                btc_went_up = price_at_end >= price_at_entry
+            if btc_open is not None and btc_close is not None:
+                btc_went_up = btc_close >= btc_open
                 # side "YES" = bought Up token, side "NO" = bought Down token
                 won = (pos.side == "YES" and btc_went_up) or (pos.side == "NO" and not btc_went_up)
                 exit_price = 1.0 if won else 0.0

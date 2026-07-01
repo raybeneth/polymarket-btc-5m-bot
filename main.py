@@ -96,8 +96,8 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         _log_skip(mid, market_id, "direction", f"{side} 订单簿无卖单价格", results)
         return
 
-    # ── Filter 2: Odds ───────────────────────────────────────────────
-    odds_result = odds.check(entry_price)
+    # ── Filter 2: Odds (acceptable price ceiling scales with direction) ─
+    odds_result = odds.check(entry_price, direction_strength=dir_result.score)
     results["odds"] = odds_result
     if not odds_result.passed:
         _log_skip(mid, market_id, "odds", odds_result.reason, results,
@@ -157,6 +157,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         entry_price=entry_price,
         combined_score=combined_score,
         filter_results=filter_results,
+        market_end_ts=market.end_timestamp,
     )
 
     log.info("─" * 70)

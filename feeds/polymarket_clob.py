@@ -27,14 +27,31 @@ def _get_proxy_url() -> Optional[str]:
     return proxies.get("https") or proxies.get("http")
 
 
+_DEFAULT_HEADERS = {
+    # Polymarket's Gamma/CLOB endpoints sit behind Cloudflare and return 403
+    # to requests with no (or non-browser) User-Agent.
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    # Don't advertise brotli — aiohttp can't decode "br" without the optional
+    # brotli package installed, which otherwise raises ClientPayloadError.
+    "Accept-Encoding": "gzip, deflate",
+}
+
+
 def create_session() -> aiohttp.ClientSession:
     """Create an aiohttp session that respects system proxy settings."""
     proxy_url = _get_proxy_url()
     if proxy_url:
         # aiohttp-socks supports http:// proxies too
         connector = ProxyConnector.from_url(proxy_url)
-        return aiohttp.ClientSession(connector=connector)
-    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=20))
+        return aiohttp.ClientSession(connector=connector, headers=_DEFAULT_HEADERS)
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(limit=20), headers=_DEFAULT_HEADERS
+    )
 
 from config import (
     GAMMA_HOST,
