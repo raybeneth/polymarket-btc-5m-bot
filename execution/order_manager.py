@@ -93,10 +93,13 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     state.record_open(pos)
 
     side_icon = "^" if decision.side == "YES" else "v"
+    stop_target = simulated_fill_price - simulated_fill_price * STOP_LOSS_RATIO
+    tp_target = simulated_fill_price + TAKE_PROFIT_DELTA
     log.info(
         f"OPEN {side_icon} {decision.side} @ {simulated_fill_price:.3f} "
         f"qty={shares:.2f} ${TRADE_SIZE_USD:.0f} "
-        f"score={decision.combined_score:.1f} {order_id}"
+        f"score={decision.combined_score:.1f} "
+        f"止损Target={stop_target:.3f} 止盈Target={tp_target:.3f} {order_id}"
     )
 
     await asyncio.get_event_loop().run_in_executor(
@@ -192,6 +195,16 @@ async def _live_execute(decision: TradeDecision) -> bool:
         market_end_ts=decision.market_end_ts,
     )
     state.record_open(pos)
+
+    side_icon = "^" if decision.side == "YES" else "v"
+    stop_target = filled_price - filled_price * STOP_LOSS_RATIO
+    tp_target = filled_price + TAKE_PROFIT_DELTA
+    log.info(
+        f"OPEN {side_icon} {decision.side} @ {filled_price:.3f} "
+        f"qty={shares:.2f} ${TRADE_SIZE_USD:.0f} "
+        f"score={decision.combined_score:.1f} "
+        f"止损Target={stop_target:.3f} 止盈Target={tp_target:.3f} {order_id}"
+    )
 
     await asyncio.get_event_loop().run_in_executor(
         None,

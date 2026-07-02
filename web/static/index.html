@@ -19,6 +19,15 @@
     --font: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* Hide scrollbars everywhere (page + inner scroll containers) without
+     disabling scrolling — wheel/drag/touch/keyboard scroll all still work. */
+  * {
+    scrollbar-width: none;      /* Firefox */
+    -ms-overflow-style: none;   /* old Edge/IE */
+  }
+  *::-webkit-scrollbar { display: none; width: 0; height: 0; }  /* Chrome/Safari/Edge */
+
   body {
     background: var(--bg);
     color: var(--text);
@@ -126,6 +135,10 @@
   .chart-sub { font-size: 10px; color: var(--text-dim); }
   .chart-wrap { flex: 1; position: relative; min-height: 120px; }
 
+  /* ── BTC price vs target chart (full width, below the stats/P&L row) ── */
+  .btc-chart-card { border-bottom: 1px solid var(--border); }
+  .btc-chart-card .chart-wrap { height: 190px; flex: none; }
+
   /* ── Section ─────────────────────────────── */
   .section { border-bottom: 1px solid var(--border); }
   .section-header {
@@ -171,9 +184,6 @@
 
   /* Fixed height showing ~3 rows; the rest scrolls. Header stays sticky. */
   .history-container { height: 140px; overflow-y: auto; }
-  .history-container::-webkit-scrollbar { width: 6px; }
-  .history-container::-webkit-scrollbar-track { background: var(--bg); }
-  .history-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .history-container thead th { position: sticky; top: 0; z-index: 1; }
 
   /* ── Log area ────────────────────────────── */
@@ -181,9 +191,6 @@
     height: 340px; overflow-y: auto;
     padding: 8px 0; background: var(--bg);
   }
-  .log-container::-webkit-scrollbar { width: 6px; }
-  .log-container::-webkit-scrollbar-track { background: var(--bg); }
-  .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .log-line {
     padding: 2px 24px; font-size: 11px;
     line-height: 1.7; color: var(--text-dim); white-space: nowrap;
@@ -230,6 +237,7 @@
     /* Give the chart a usable fixed height once it's full-width */
     .chart-card { height: 240px; }
     .chart-wrap { min-height: 0; }
+    .btc-chart-card .chart-wrap { height: 160px; }
 
     /* Open Positions above Position History — stacked, divided by a line */
     .tables-row { grid-template-columns: 1fr; }
@@ -309,6 +317,17 @@
     </div>
   </div>
 
+</div>
+
+<!-- BTC real-time price vs target (reference open price of active positions' market window) -->
+<div class="chart-card btc-chart-card">
+  <div class="chart-header">
+    <span class="chart-title">BTC Price vs Target</span>
+    <span class="chart-sub" id="btcChartSub">—</span>
+  </div>
+  <div class="chart-wrap">
+    <div id="btcChart" style="width:100%;height:100%"></div>
+  </div>
 </div>
 
 <!-- Open Positions + Position History (side by side) -->
@@ -457,6 +476,108 @@ function updateChart(history) {
   $('chartSub').textContent = `${candles.length} trade${candles.length !== 1 ? 's' : ''} · 累计 ${net >= 0 ? '+' : ''}${net.toFixed(2)} USD`;
 }
 
+// ── BTC price vs target chart (line + horizontal target price-lines) ──
+let _btcChart = null;
+let _btcSeries = null;
+let _btcChartAnchored = false;
+let _btcPriceLines = {};  // order_id -> priceLine handle, so we can remove stale ones
+
+function initBtcChart() {
+  const container = $('btcChart');
+  _btcChart = LightweightCharts.createChart(container, {
+    autoSize: true,
+    layout: {
+      background: { type: 'solid', color: '#162530' },
+      textColor: '#7a9aaa',
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      fontSize: 10,
+    },
+    grid: {
+      vertLines: { color: 'rgba(30,48,60,0.9)' },
+      horzLines: { color: 'rgba(30,48,60,0.9)' },
+    },
+    timeScale: {
+      timeVisible: true,
+      secondsVisible: true,
+      borderColor: '#1e303c',
+      rightOffset: 3,
+    },
+    rightPriceScale: {
+      borderColor: '#1e303c',
+      scaleMargins: { top: 0.15, bottom: 0.15 },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Magnet,
+      vertLine: { color: '#27a69a', width: 1, style: 3 },
+      horzLine: { color: '#27a69a', width: 1, style: 3 },
+    },
+    handleScroll: true,
+    handleScale: true,
+  });
+
+  _btcSeries = _btcChart.addLineSeries({
+    color: '#e8b339',
+    lineWidth: 2,
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    lastValueVisible: true,
+    priceLineVisible: false,
+  });
+}
+
+function updateBtcChart(history, positions) {
+  if (!_btcChart) initBtcChart();
+
+  let last = null;
+  if (history && history.length) {
+    const seen = new Set();
+    const points = [];
+    for (const [t, p] of history) {
+      const time = Math.floor(t);
+      if (seen.has(time)) continue;   // lightweight-charts requires strictly-increasing unique times
+      seen.add(time);
+      points.push({ time, value: p });
+    }
+    points.sort((a, b) => a.time - b.time);
+    if (points.length) {
+      _btcSeries.setData(points);
+      last = points[points.length - 1].value;
+      if (!_btcChartAnchored) {
+        _btcChart.timeScale().scrollToRealTime();
+        _btcChartAnchored = true;
+      }
+    }
+  }
+
+  // Sync one dashed target price-line per currently open position; drop
+  // lines for positions that have since closed so the chart doesn't
+  // accumulate stale reference levels.
+  const activeIds = new Set((positions || []).map(p => p.order_id));
+  for (const id of Object.keys(_btcPriceLines)) {
+    if (!activeIds.has(id)) {
+      _btcSeries.removePriceLine(_btcPriceLines[id]);
+      delete _btcPriceLines[id];
+    }
+  }
+  (positions || []).forEach(p => {
+    if (p.target == null) return;
+    if (_btcPriceLines[p.order_id]) {
+      _btcSeries.removePriceLine(_btcPriceLines[p.order_id]);
+    }
+    _btcPriceLines[p.order_id] = _btcSeries.createPriceLine({
+      price: p.target,
+      color: p.side === 'YES' ? '#27a69a' : '#ef5350',
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: `${p.side} 目标`,
+    });
+  });
+
+  $('btcChartSub').textContent = last != null
+    ? '$' + last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
+}
+
 // ── WebSocket ──────────────────────────────────
 let ws = null;
 
@@ -527,6 +648,10 @@ function render(d) {
 
   // Open positions
   const positions = d.positions || [];
+
+  // BTC price vs target chart
+  updateBtcChart(d.btc_history || [], positions);
+
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0
     ? '<tr><td colspan="7" class="empty-row">No open positions</td></tr>'

@@ -65,7 +65,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
     yes_book, no_book = await fetch_both_books(session, market)
     if yes_book is None or no_book is None:
-        log.info(f"[{mid}] 跳过: 订单簿获取失败")
+        log.debug(f"[{mid}] 跳过: 订单簿获取失败")
         return
 
     elapsed = market.elapsed_seconds
@@ -74,44 +74,44 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # Filter 1: Direction
     dir_result = direction.check(yes_book, no_book)
     if not dir_result.passed:
-        log.info(f"[{mid}] 跳过方向: 信号过弱 ({dir_result.details.get('score_raw', 0):.0f})")
+        log.debug(f"[{mid}] 跳过方向: 信号过弱 ({dir_result.details.get('score_raw', 0):.0f})")
         return
     if dir_result.score < MIN_DIRECTION_FILTER_SCORE:
-        log.info(f"[{mid}] 跳过方向下限: {dir_result.score:.0f} < {MIN_DIRECTION_FILTER_SCORE:.0f}")
+        log.debug(f"[{mid}] 跳过方向下限: {dir_result.score:.0f} < {MIN_DIRECTION_FILTER_SCORE:.0f}")
         return
 
     side = dir_result.details["direction"]
     book = yes_book if side == "YES" else no_book
     entry_price = book.best_ask
     if entry_price is None:
-        log.info(f"[{mid}] 跳过: {side} 无卖一价")
+        log.debug(f"[{mid}] 跳过: {side} 无卖一价")
         return
 
     # Filter 2: Odds
     odds_result = odds.check(entry_price, direction_strength=dir_result.score)
     if not odds_result.passed:
-        log.info(f"[{mid}] 跳过赔率: 价格 {entry_price:.3f} 被拒绝")
+        log.debug(f"[{mid}] 跳过赔率: 价格 {entry_price:.3f} 被拒绝")
         return
 
     # Filter 3: Timing
     timing_result = timing.check(elapsed, remaining)
     if not timing_result.passed:
-        log.info(f"[{mid}] 跳过时机: 已过{elapsed:.0f}s 剩余{remaining:.0f}s")
+        log.debug(f"[{mid}] 跳过时机: 已过{elapsed:.0f}s 剩余{remaining:.0f}s")
         return
     if timing_result.score < MIN_TIMING_FILTER_SCORE:
-        log.info(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
+        log.debug(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
     # Filter 4: Spread
     spread_result = spread.check(book, side)
     if not spread_result.passed:
-        log.info(f"[{mid}] 跳过价差: {spread_result.reason}")
+        log.debug(f"[{mid}] 跳过价差: {spread_result.reason}")
         return
 
     # Filter 5: Chase
     chase_result = chase.check(book)
     if not chase_result.passed:
-        log.info(f"[{mid}] 跳过追单: {chase_result.reason}")
+        log.debug(f"[{mid}] 跳过追单: {chase_result.reason}")
         return
 
     # Combined score
@@ -123,7 +123,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         SCORE_WEIGHTS[name] * result.score for name, result in filter_results.items()
     )
     if combined_score < MIN_COMBINED_SCORE:
-        log.info(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
+        log.debug(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
         return
 
     # TRADE SIGNAL
@@ -156,6 +156,10 @@ def _build_web_state() -> dict:
     for pos in state.open_positions:
         stop_price = pos.entry_price * (1 - STOP_LOSS_RATIO)
         remaining = max(0, int(pos.market_end_ts - now)) if pos.market_end_ts > 0 else 0
+        # Target = BTC price at the start of this market's own 5-min window —
+        # the same reference point resolve_expired_positions() settles against,
+        # i.e. the level BTC needs to stay above (YES) / below (NO) to win.
+        target = btc_price.get_price_at(pos.market_end_ts - 300) if pos.market_end_ts > 0 else None
         positions.append({
             "side": pos.side,
             "entry": pos.entry_price,
@@ -164,11 +168,13 @@ def _build_web_state() -> dict:
             "stop": round(stop_price, 3),
             "expiry": remaining,
             "order_id": pos.order_id,
+            "target": round(target, 2) if target is not None else None,
         })
 
     return {
         "btc_price": btc_price.get_latest(),
         "btc_connected": btc_price.is_connected(),
+        "btc_history": btc_price.get_chart_series(),
         "markets_count": len(get_active_markets()),
         "today": {
             "trades": state.trades_today,
@@ -246,6 +252,7 @@ async def main_loop() -> None:
         loop_count = 0
         while True:
             loop_count += 1
+
             markets = get_active_markets()
 
             if not markets:

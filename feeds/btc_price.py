@@ -80,6 +80,29 @@ def get_prices_since(since_timestamp: float) -> list[tuple[float, float]]:
     return [(t, p) for t, p in _price_history if t >= since_timestamp]
 
 
+def get_chart_series(seconds: float = _MAX_HISTORY_SECONDS, bucket: float = 2.0) -> list[tuple[float, float]]:
+    """
+    Downsampled (timestamp, price) series for the dashboard chart — at most
+    one point per `bucket` seconds (last price seen in that bucket), covering
+    the last `seconds`. The raw feed can emit many ticks per second; shipping
+    every one over the websocket on each broadcast would bloat the payload
+    for no visual benefit at chart resolution.
+    """
+    cutoff = time.time() - seconds
+    out: list[tuple[float, float]] = []
+    last_bucket = None
+    for t, p in _price_history:
+        if t < cutoff:
+            continue
+        b = int(t // bucket)
+        if b != last_bucket:
+            out.append((t, p))
+            last_bucket = b
+        else:
+            out[-1] = (t, p)
+    return out
+
+
 def get_price_n_seconds_ago(seconds: int) -> Optional[float]:
     """
     Return the closest price sample from `seconds` ago.
