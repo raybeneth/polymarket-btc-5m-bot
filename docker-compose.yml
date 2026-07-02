@@ -1,4 +1,23 @@
 services:
+  mysql:
+    image: mysql:8.4.10
+    container_name: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql_jpdBm6
+    ports:
+      - "3306:3306"
+    volumes:
+      - /home/mysql-data:/var/lib/mysql
+    networks:
+      1panel-network
+        ipv4_address: 172.18.0.2
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   bot:
     build: .
     container_name: polymarket-bot
@@ -8,12 +27,22 @@ services:
     env_file: .env
     environment:
       MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: mysql_jpdBm6
+      MYSQL_DATABASE: polymarket_bot
     volumes:
       - ./data:/data
+    networks:
+      1panel-network:
+        ipv4_address: 172.18.0.3
     depends_on:
       mysql:
         condition: service_healthy
 
 volumes:
-  mysql_data:
+  mysql-data:
+
+networks:
+  1panel-network:
+    external: true
