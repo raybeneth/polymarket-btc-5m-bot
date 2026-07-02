@@ -211,6 +211,45 @@
     min-width: 0;
   }
   .tables-row .section:last-child { border-right: none; }
+
+  /* ── Mobile / narrow screens ─────────────────
+     Stack the 50/50 grids, let wide tables scroll horizontally,
+     and tighten paddings/fonts so everything fits a phone. */
+  @media (max-width: 768px) {
+    /* Header wraps onto two lines instead of overflowing */
+    .header { padding: 12px 14px; flex-wrap: wrap; gap: 8px 12px; }
+    .header-right { gap: 14px; width: 100%; justify-content: space-between; }
+    .logo { font-size: 14px; }
+    .btc-price { font-size: 16px; }
+
+    /* Stats(2×2) on top, chart below — no longer side by side */
+    .stats-row  { grid-template-columns: 1fr; }
+    .stat-card  { padding: 14px 16px; }
+    .stat-value { font-size: 19px; }
+
+    /* Give the chart a usable fixed height once it's full-width */
+    .chart-card { height: 240px; }
+    .chart-wrap { min-height: 0; }
+
+    /* Open Positions above Position History — stacked, divided by a line */
+    .tables-row { grid-template-columns: 1fr; }
+    .tables-row .section { border-right: none; border-bottom: 1px solid var(--border); }
+    .tables-row .section:last-child { border-bottom: none; }
+
+    /* Wide tables scroll sideways instead of squishing/wrapping */
+    .table-scroll,
+    .history-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .positions-table { width: max-content; min-width: 100%; }
+    .positions-table th,
+    .positions-table td { padding: 8px 12px; white-space: nowrap; }
+    .empty-row { padding: 16px !important; }
+
+    .section-header { padding: 10px 14px; }
+
+    /* Logs: shorter, allow long lines to scroll horizontally */
+    .log-container { height: 240px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .log-line { padding: 2px 14px; }
+  }
 </style>
 </head>
 <body>
@@ -280,14 +319,16 @@
       <span class="section-title">Open Positions</span>
       <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
     </div>
-    <table class="positions-table">
-      <thead>
-        <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
-      </thead>
-      <tbody id="posBody">
-        <tr><td colspan="7" class="empty-row">No open positions</td></tr>
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table class="positions-table">
+        <thead>
+          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
+        </thead>
+        <tbody id="posBody">
+          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div class="section">
