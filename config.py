@@ -38,6 +38,11 @@ MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot")
 
+# BTC spot price feed source. Binance WS can return HTTP 451 (geo-blocked)
+# depending on the server's region — switch source via env var, no code change.
+#   "binance" (default) | "okx"
+BTC_PRICE_SOURCE: str = os.getenv("BTC_PRICE_SOURCE", "binance").lower()
+
 # Local file backup of trade/position records (MySQL is the source of truth
 # for stats/PnL; these files are kept only for manual inspection/debugging).
 TRADE_LOG_FILE: str = "trades.jsonl"
@@ -77,7 +82,7 @@ ODDS_DYN_MAX_WEAK: float = 0.60   # acceptable ceiling when direction strength =
 #   score   ≥ MIN_DIRECTION_SCORE  →  bullish  → buy YES
 #   score   ≤ -MIN_DIRECTION_SCORE →  bearish  → buy NO
 #
-DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade
+DIRECTION_MIN_SCORE: float = 16.0    # minimum abs momentum score to trade (was 20 — loosened to admit more moderate-conviction signals for strategy evaluation)
 DIRECTION_LOOKBACK_SECONDS: int = 180  # how far back to measure BTC momentum
 DIRECTION_FAST_WINDOW: int = 45        # short-term window (seconds) for fast MA
 DIRECTION_SLOW_WINDOW: int = 120       # long-term window (seconds) for slow MA
@@ -196,7 +201,7 @@ SCORE_WEIGHTS: dict = {
     "spread":    0.10,
     "chase":     0.10,
 }
-MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade
+MIN_COMBINED_SCORE: float = 53.0      # minimum composite score to place trade (was 55 — small loosening to raise trade volume for evaluation)
 MIN_DIRECTION_FILTER_SCORE: float = 15.0  # hard floor: direction score < 15 → skip regardless of combined
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
 

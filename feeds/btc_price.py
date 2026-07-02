@@ -1,8 +1,12 @@
 """
-BTC spot price feed via Binance WebSocket.
+BTC spot price feed via exchange WebSocket.
 
 Maintains a rolling time-series of (timestamp, price) in memory.
 Other modules call `get_prices_since(t)` or `get_latest()` — no polling needed.
+
+Source is switchable via config.BTC_PRICE_SOURCE ("binance" | "okx") since
+Binance's WS can be geo-blocked (HTTP 451) depending on the server's region —
+OKX is kept as a drop-in alternative with the same (timestamp, price) output.
 """
 import asyncio
 import json
@@ -15,10 +19,45 @@ from typing import Optional
 import websockets
 from websockets_proxy import Proxy, proxy_connect
 
+from config import BTC_PRICE_SOURCE
+
 log = logging.getLogger(__name__)
 
-# ── Binance stream for BTC/USDT mark price (1s updates, no auth needed)
+# ── Binance: raw trade stream, one JSON object per trade
 _BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
+
+# ── OKX: public WS requires a subscribe frame after connecting; trades
+# arrive batched in msg["data"]
+_OKX_WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
+_OKX_SUBSCRIBE_MSG = json.dumps({
+    "op": "subscribe",
+    "args": [{"channel": "trades", "instId": "BTC-USDT"}],
+})
+
+
+def _parse_binance(msg: dict) -> list[tuple[float, float]]:
+    """aggTrade message -> [(timestamp, price)]."""
+    if "p" not in msg or "T" not in msg:
+        return []
+    return [(msg["T"] / 1000.0, float(msg["p"]))]
+
+
+def _parse_okx(msg: dict) -> list[tuple[float, float]]:
+    """trades-channel message -> [(timestamp, price), ...] (empty for subscribe acks)."""
+    out = []
+    for trade in msg.get("data") or []:
+        try:
+            out.append((float(trade["ts"]) / 1000.0, float(trade["px"])))
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+# name -> (ws_url, subscribe_message_or_None, parse_fn, display_label)
+_SOURCES = {
+    "binance": (_BINANCE_WS_URL, None, _parse_binance, "币安"),
+    "okx": (_OKX_WS_URL, _OKX_SUBSCRIBE_MSG, _parse_okx, "OKX"),
+}
 
 # Rolling buffer: (unix_timestamp_float, price_float)
 # Keep 10 minutes of history so direction signals have enough lookback
@@ -81,11 +120,18 @@ def is_connected() -> bool:
 
 async def _run_feed() -> None:
     """
-    Internal coroutine that maintains the Binance WebSocket connection.
-    Reconnects automatically on any error. Uses system proxy if available.
+    Internal coroutine that maintains the exchange WebSocket connection
+    (source selected by config.BTC_PRICE_SOURCE). Reconnects automatically
+    on any error. Uses system proxy if available.
     """
     global _latest_price, _connected
     backoff = 1.0
+
+    ws_url, subscribe_msg, parse_fn, label = _SOURCES.get(
+        BTC_PRICE_SOURCE, _SOURCES["binance"]
+    )
+    if BTC_PRICE_SOURCE not in _SOURCES:
+        log.warning(f"未知的 BTC_PRICE_SOURCE={BTC_PRICE_SOURCE!r}，回退到默认的币安数据源")
 
     # Detect system proxy
     proxies = urllib.request.getproxies()
@@ -93,34 +139,35 @@ async def _run_feed() -> None:
 
     while True:
         try:
-            log.info("正在连接币安 BTC/USDT 数据流 …")
+            log.info(f"正在连接 {label} BTC/USDT 数据流 …")
             if proxy_url:
                 proxy = Proxy.from_url(proxy_url)
                 ws_ctx = proxy_connect(
-                    _BINANCE_WS_URL,
+                    ws_url,
                     proxy=proxy,
                     ping_interval=20,
                     ping_timeout=10,
                 )
             else:
                 ws_ctx = websockets.connect(
-                    _BINANCE_WS_URL,
+                    ws_url,
                     ping_interval=20,
                     ping_timeout=10,
                 )
 
             async with ws_ctx as ws:
+                if subscribe_msg:
+                    await ws.send(subscribe_msg)
+
                 _connected = True
                 backoff = 1.0
-                log.info("币安 WebSocket 已连接。")
+                log.info(f"{label} WebSocket 已连接。")
 
                 async for raw in ws:
                     msg = json.loads(raw)
-                    price = float(msg["p"])   # aggTrade price field
-                    ts = msg["T"] / 1000.0    # trade timestamp in seconds
-
-                    _latest_price = price
-                    _price_history.append((ts, price))
+                    for ts, price in parse_fn(msg):
+                        _latest_price = price
+                        _price_history.append((ts, price))
 
                     # evict old samples
                     cutoff = time.time() - _MAX_HISTORY_SECONDS
@@ -129,7 +176,7 @@ async def _run_feed() -> None:
 
         except Exception as exc:
             _connected = False
-            log.warning(f"币安 WebSocket 错误: {exc}。将在 {backoff}s 后重连 …")
+            log.warning(f"{label} WebSocket 错误: {exc}。将在 {backoff}s 后重连 …")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
