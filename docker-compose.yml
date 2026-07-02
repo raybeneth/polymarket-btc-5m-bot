@@ -50,6 +50,6 @@ services:
 networks:
   1panel-network:
     driver: bridge
-      ipam:
-        config:
-          - subnet: 172.18.0.0/16
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
