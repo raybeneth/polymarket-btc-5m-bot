@@ -66,14 +66,14 @@ _SOURCES = {
 # the chart, then the frontend keeps the current minute's candle live from the
 # WS spot price. Both exchanges accept limit up to (Binance 1000 / OKX 300);
 # 180 candles = 3h is plenty to fill and pan the chart.
-_KLINE_LIMIT = 180
+_KLINE_LIMIT = 180   # 1m × 180 = 3h of history; OKX request clamped to 300 below
 _BINANCE_KLINE_URL = (
     f"https://api.binance.com/api/v3/klines"
     f"?symbol=BTCUSDT&interval=1m&limit={_KLINE_LIMIT}"
 )
 _OKX_KLINE_URL = (
     f"https://www.okx.com/api/v5/market/candles"
-    f"?instId=BTC-USDT&bar=1m&limit={_KLINE_LIMIT}"
+    f"?instId=BTC-USDT&bar=1m&limit={min(_KLINE_LIMIT, 300)}"
 )
 
 

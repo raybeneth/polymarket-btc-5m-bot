@@ -221,7 +221,7 @@
 
   /* ── BTC 1m candlestick chart (full width, below the stats/P&L row) ── */
   .btc-chart-card { border-bottom: 1px solid var(--border); }
-  .btc-chart-card .chart-wrap { height: 190px; flex: none; }
+  .btc-chart-card .chart-wrap { height: 460px; flex: none; }
   /* Target readout below the title, in yellow — replaces the label that used
      to float on the dashed price line itself. */
   .btc-target-label {
@@ -300,18 +300,19 @@
 
   .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
 
-  /* ── Tables row (side by side) ─────────────── */
-  .tables-row {
+  /* ── Main row: BTC chart (left) + Open Positions (right) ─────── */
+  .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     border-bottom: 1px solid var(--border);
   }
-  .tables-row .section {
+  .main-row > .btc-chart-card,
+  .main-row > .section {
     border-bottom: none;
     border-right: 1px solid var(--border);
     min-width: 0;
   }
-  .tables-row .section:last-child { border-right: none; }
+  .main-row > *:last-child { border-right: none; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -338,14 +339,14 @@
     .stat-value { font-size: 19px; }
     .chart-wrap { min-height: 0; }
 
-    /* BTC candlestick keeps its own fixed height below the stats grid */
-    .btc-chart-card { height: 240px; }
-    .btc-chart-card .chart-wrap { height: 160px; }
+    /* BTC candlestick keeps its own fixed height */
+    .btc-chart-card { height: 400px; }
+    .btc-chart-card .chart-wrap { height: 330px; }
 
-    /* Open Positions above Position History — stacked, divided by a line */
-    .tables-row { grid-template-columns: 1fr; }
-    .tables-row .section { border-right: none; border-bottom: 1px solid var(--border); }
-    .tables-row .section:last-child { border-bottom: none; }
+    /* Stack the main row (chart above Open Positions), divided by a line */
+    .main-row { grid-template-columns: 1fr; }
+    .main-row > .btc-chart-card,
+    .main-row > .section { border-right: none; border-bottom: 1px solid var(--border); }
 
     /* Wide tables scroll sideways instead of squishing/wrapping */
     .table-scroll,
@@ -430,20 +431,19 @@
 
 </div>
 
-<!-- BTC real-time price vs target (reference open price of active positions' market window) -->
-<div class="chart-card btc-chart-card">
-  <div class="chart-header">
-    <span class="chart-title">BTC/USDT · 1minute · CEX</span>
-    <span class="chart-sub" id="btcChartSub">—</span>
-  </div>
-  <div class="btc-target-label" id="btcTargetLabel">Reference Target —</div>
-  <div class="chart-wrap">
-    <div id="btcChart" style="width:100%;height:100%"></div>
-  </div>
-</div>
+<!-- Desktop: BTC chart (left) + Open Positions (right); mobile: stacked -->
+<div class="main-row">
 
-<!-- Open Positions + Position History (side by side) -->
-<div class="tables-row">
+  <div class="chart-card btc-chart-card">
+    <div class="chart-header">
+      <span class="chart-title">BTC/USDT · 1minute · CEX</span>
+      <span class="chart-sub" id="btcChartSub">—</span>
+    </div>
+    <div class="btc-target-label" id="btcTargetLabel">Reference Target —</div>
+    <div class="chart-wrap">
+      <div id="btcChart" style="width:100%;height:100%"></div>
+    </div>
+  </div>
 
   <div class="section">
     <div class="section-header">
@@ -462,23 +462,24 @@
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">Position History</span>
-      <span style="color:var(--text-dim);font-size:10px" id="histCount">0</span>
-    </div>
-    <div class="history-container" id="historyContainer">
-      <table class="positions-table">
-        <thead>
-          <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
-        </thead>
-        <tbody id="histBody">
-          <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+</div>
 
+<!-- Position History — full width -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-title">Position History</span>
+    <span style="color:var(--text-dim);font-size:10px" id="histCount">0</span>
+  </div>
+  <div class="history-container" id="historyContainer">
+    <table class="positions-table">
+      <thead>
+        <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
+      </thead>
+      <tbody id="histBody">
+        <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <!-- Logs -->
