@@ -10,8 +10,7 @@ services:
     volumes:
       - /home/mysql-data:/var/lib/mysql
     networks:
-      1panel-network:
-        ipv4_address: 172.18.0.2
+      - 1panel-network
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -41,15 +40,7 @@ services:
     volumes:
       - ./data:/data
     networks:
-      1panel-network:
-        ipv4_address: 172.18.0.3
+      - 1panel-network
     depends_on:
       mysql:
         condition: service_healthy
-
-networks:
-  1panel-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.18.0.0/16
