@@ -64,7 +64,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
 
     _ws_clients.add(ws)
-    log.info(f"WebSocket 客户端已连接 (共{len(_ws_clients)}个)")
+    log.debug(f"WebSocket 客户端已连接 (共{len(_ws_clients)}个)")
 
     # Send initial snapshot
     try:
@@ -78,7 +78,7 @@ async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
             pass  # we don't expect messages from the client
     finally:
         _ws_clients.discard(ws)
-        log.info(f"WebSocket 客户端已断开 (共{len(_ws_clients)}个)")
+        log.debug(f"WebSocket 客户端已断开 (共{len(_ws_clients)}个)")
 
     return ws
 
@@ -128,7 +128,10 @@ async def start_web_server() -> None:
     app.router.add_get("/ws", _handle_ws)
     app.router.add_static("/static/", _STATIC_DIR)
 
-    runner = web.AppRunner(app)
+    # access_log=None disables aiohttp's per-request access log — otherwise it
+    # prints every HTTP/WS request including the client's User-Agent (browser/
+    # device info), which is noise we don't want in the console/bot.log.
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", _WEB_PORT)
     await site.start()
