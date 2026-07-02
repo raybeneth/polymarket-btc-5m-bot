@@ -32,7 +32,9 @@ def _get_proxy_url() -> Optional[str]:
 
 _DEFAULT_HEADERS = {
     # Polymarket's Gamma/CLOB endpoints sit behind Cloudflare and return 403
-    # to requests with no (or non-browser) User-Agent.
+    # to requests that don't look like a browser tab actually on polymarket.com —
+    # missing Referer/Origin/Accept-Language is a common bot-detection signal,
+    # so we send the same set a real browser would on that page.
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -42,6 +44,9 @@ _DEFAULT_HEADERS = {
     # Don't advertise brotli — aiohttp can't decode "br" without the optional
     # brotli package installed, which otherwise raises ClientPayloadError.
     "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://polymarket.com/",
+    "Origin": "https://polymarket.com",
 }
 
 
@@ -308,12 +313,17 @@ async def fetch_order_book(
     url = f"{POLYMARKET_HOST}/book"
     params = {"token_id": token_id}
 
-    # 1 initial attempt + 1 retry. Transient timeouts / 5xx are common when the
-    # CLOB (behind Cloudflare) is slow or the proxy hiccups; a quick retry
-    # usually succeeds. 4xx (bad/expired token) won't improve, so we stop early.
+    # Transient timeouts / 5xx are common when the CLOB (behind Cloudflare) is
+    # slow; a quick retry usually succeeds. HTTP 403 is also given a couple of
+    # retries with backoff since it can be Cloudflare's edge WAF tripping a
+    # rate-based rule on a specific PoP rather than a persistent geo-block —
+    # other 4xx (bad/expired token) won't improve, so those stop immediately.
     data = None
     last_err = None
-    for attempt in range(2):
+    attempts = 0
+    max_attempts = 3
+    while attempts < max_attempts:
+        attempts += 1
         try:
             async with session.get(
                 url, params=params, timeout=aiohttp.ClientTimeout(total=8)
@@ -321,16 +331,22 @@ async def fetch_order_book(
                 if resp.status == 200:
                     data = await resp.json()
                     break
-                last_err = f"HTTP {resp.status}"
-                if resp.status < 500:
-                    break  # client error — retry won't help
+                body = (await resp.text())[:300].replace("\n", " ").strip()
+                last_err = (
+                    f"HTTP {resp.status} | server={resp.headers.get('Server', '-')} "
+                    f"cf-ray={resp.headers.get('CF-RAY', '-')} "
+                    f"retry-after={resp.headers.get('Retry-After', '-')} "
+                    f"body={body!r}"
+                )
+                if resp.status != 403 and resp.status < 500:
+                    break  # non-403 client error — retry won't help
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
-        if attempt == 0:
-            await asyncio.sleep(0.4)  # brief backoff before the single retry
+        if data is None and attempts < max_attempts:
+            await asyncio.sleep(0.4 * attempts)  # 0.4s, 0.8s backoff
 
     if data is None:
-        log.warning(f"订单簿获取失败 {token_id[:12]}… — {last_err}")
+        log.warning(f"订单簿获取失败 {token_id[:12]}… (尝试{attempts}次) — {last_err}")
         return None
 
     def parse_levels(raw: list) -> list[BookLevel]:
