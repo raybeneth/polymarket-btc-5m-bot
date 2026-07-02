@@ -39,6 +39,7 @@ services:
       PAPER_TRADING: true
       TRADE_SIZE_USD: 10.0
       LOG_LEVEL: DEBUG
+      BTC_PRICE_SOURCE: okx
     volumes:
       - ./data:/data
     networks:
