@@ -43,6 +43,12 @@ MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot")
 #   "binance" (default) | "okx"
 BTC_PRICE_SOURCE: str = os.getenv("BTC_PRICE_SOURCE", "binance").lower()
 
+# Master proxy switch. When True (default), feeds use the system HTTP_PROXY/
+# HTTPS_PROXY env vars if set (needed when Polymarket's CLOB returns HTTP 403
+# for this server's IP). When False, ALL feeds connect directly and ignore
+# HTTP_PROXY/HTTPS_PROXY entirely, even if configured in the environment.
+PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "true").lower() == "true"
+
 # Local file backup of trade/position records (MySQL is the source of truth
 # for stats/PnL; these files are kept only for manual inspection/debugging).
 TRADE_LOG_FILE: str = "trades.jsonl"

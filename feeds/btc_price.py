@@ -19,7 +19,7 @@ from typing import Optional
 import websockets
 from websockets_proxy import Proxy, proxy_connect
 
-from config import BTC_PRICE_SOURCE
+from config import BTC_PRICE_SOURCE, PROXY_ENABLED
 
 log = logging.getLogger(__name__)
 
@@ -133,9 +133,11 @@ async def _run_feed() -> None:
     if BTC_PRICE_SOURCE not in _SOURCES:
         log.warning(f"未知的 BTC_PRICE_SOURCE={BTC_PRICE_SOURCE!r}，回退到默认的币安数据源")
 
-    # Detect system proxy
-    proxies = urllib.request.getproxies()
-    proxy_url = proxies.get("https") or proxies.get("http")
+    # Detect system proxy, unless disabled via PROXY_ENABLED
+    proxy_url = None
+    if PROXY_ENABLED:
+        proxies = urllib.request.getproxies()
+        proxy_url = proxies.get("https") or proxies.get("http")
 
     while True:
         try:

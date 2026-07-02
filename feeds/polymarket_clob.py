@@ -20,8 +20,11 @@ from typing import Optional
 import aiohttp
 from aiohttp_socks import ProxyConnector
 
+
 def _get_proxy_url() -> Optional[str]:
-    """Read system proxy from environment (set by Windows IE/registry settings)."""
+    """Read system proxy from environment, unless disabled via PROXY_ENABLED."""
+    if not PROXY_ENABLED:
+        return None
     import urllib.request
     proxies = urllib.request.getproxies()
     return proxies.get("https") or proxies.get("http")
@@ -79,6 +82,7 @@ from config import (
     MARKET_MIN_VOLUME_USD,
     SCANNER_POLL_INTERVAL,
     DEPTH_LEVELS_TO_CHECK,
+    PROXY_ENABLED,
 )
 
 log = logging.getLogger(__name__)

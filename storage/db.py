@@ -146,13 +146,19 @@ def get_stats() -> dict:
     conn = _get_pool().connection()
     try:
         with conn.cursor() as cur:
+            # "trades" counts every position ever opened (OPEN or CLOSED) —
+            # not just resolved ones — so a still-open position (e.g. restored
+            # after a restart) is reflected immediately instead of appearing
+            # as 0 until it settles. wins/losses/pnl are naturally NULL on
+            # open rows (see generated columns in schema.sql) so they don't
+            # need an extra status filter.
             cur.execute(
                 """
                 SELECT COUNT(*) AS total_trades,
                        COALESCE(SUM(result='WIN'), 0)  AS wins,
                        COALESCE(SUM(result='LOSS'), 0) AS losses,
                        COALESCE(SUM(pnl), 0) AS total_pnl
-                FROM positions WHERE status='CLOSED'
+                FROM positions
                 """
             )
             overall = cur.fetchone()
@@ -163,7 +169,7 @@ def get_stats() -> dict:
                        COALESCE(SUM(result='LOSS'), 0) AS today_losses,
                        COALESCE(SUM(pnl), 0) AS today_pnl
                 FROM positions
-                WHERE status='CLOSED' AND DATE(closed_at) = UTC_DATE()
+                WHERE DATE(opened_at) = UTC_DATE()
                 """
             )
             today = cur.fetchone()
