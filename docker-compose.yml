@@ -38,7 +38,7 @@ services:
       CLOB_API_PASSPHRASE: c69fba8de75f0ef1622b31ecf1b12b82d74a52e232a9842866f05138c3563be1
       PAPER_TRADING: true
       TRADE_SIZE_USD: 10.0
-      LOG_LEVEL: DEBUG
+      LOG_LEVEL: INFO
       BTC_PRICE_SOURCE: okx
     volumes:
       - ./data:/data
