@@ -1,0 +1,13 @@
+.env
+.git
+__pycache__
+*.pyc
+*.pyo
+venv/
+.venv/
+*.log
+*.jsonl
+positions.log
+data/
+.claude/
+docs/

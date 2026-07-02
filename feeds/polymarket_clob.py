@@ -132,16 +132,21 @@ class OrderBook:
     def imbalance(self, levels: int = 5) -> float:
         """
         Orderbook imbalance score in [-1, +1].
-        +1 = all pressure on ask side (buyers dominant → bullish)
-        -1 = all pressure on bid side (sellers dominant → bearish)
+
+        Standard microstructure convention:
+          bids = resting demand (support) → bid-heavy pushes price up → bullish
+          asks = resting supply (overhang) → ask-heavy pushes price down → bearish
+
+        +1 = all volume on bid side (demand dominant → bullish)
+        -1 = all volume on ask side (supply dominant → bearish)
         """
         ask_vol = sum(lvl.size for lvl in self.asks[:levels])
         bid_vol = sum(lvl.size for lvl in self.bids[:levels])
         total = ask_vol + bid_vol
         if total == 0:
             return 0.0
-        # More ask volume means buyers are aggressive → bullish signal
-        return (ask_vol - bid_vol) / total
+        # More bid volume means demand outweighs supply → bullish signal
+        return (bid_vol - ask_vol) / total
 
 
 @dataclass
@@ -292,17 +297,36 @@ async def fetch_order_book(
       { "bids": [{"price": "0.55", "size": "120"}, ...],
         "asks": [{"price": "0.57", "size": "80"},  ...] }
     """
+    if not token_id:
+        log.warning("订单簿获取失败: token_id 为空(市场数据缺失)")
+        return None
+
     url = f"{POLYMARKET_HOST}/book"
     params = {"token_id": token_id}
 
-    try:
-        async with session.get(
-            url, params=params, timeout=aiohttp.ClientTimeout(total=5)
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-    except Exception as exc:
-        log.debug(f"订单簿获取失败 {token_id[:12]}…: {exc}")
+    # 1 initial attempt + 1 retry. Transient timeouts / 5xx are common when the
+    # CLOB (behind Cloudflare) is slow or the proxy hiccups; a quick retry
+    # usually succeeds. 4xx (bad/expired token) won't improve, so we stop early.
+    data = None
+    last_err = None
+    for attempt in range(2):
+        try:
+            async with session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=8)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    break
+                last_err = f"HTTP {resp.status}"
+                if resp.status < 500:
+                    break  # client error — retry won't help
+        except Exception as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+        if attempt == 0:
+            await asyncio.sleep(0.4)  # brief backoff before the single retry
+
+    if data is None:
+        log.warning(f"订单簿获取失败 {token_id[:12]}… — {last_err}")
         return None
 
     def parse_levels(raw: list) -> list[BookLevel]:

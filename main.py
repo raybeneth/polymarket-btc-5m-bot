@@ -230,7 +230,7 @@ async def main_loop() -> None:
     if state.open_positions:
         log.info(f"已从 MySQL 恢复 {len(state.open_positions)} 个未平仓仓位")
 
-    _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, 50)
+    _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, None)
 
     # Start web server
     await web_server.start_web_server()
@@ -243,7 +243,9 @@ async def main_loop() -> None:
         await asyncio.sleep(3.0)
         log.info("主循环已启动")
 
+        loop_count = 0
         while True:
+            loop_count += 1
             markets = get_active_markets()
 
             if not markets:
@@ -257,7 +259,10 @@ async def main_loop() -> None:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await order_manager.check_early_exits(session)
                 await order_manager.resolve_expired_positions()
-                _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, 50)
+                # Full closed-history is only for the dashboard — refresh it
+                # every ~5 loops instead of every loop to keep the hot path lean.
+                if loop_count % 5 == 1:
+                    _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, None)
             except (ConnectionResetError, aiohttp.ClientError, OSError) as exc:
                 log.warning(f"网络异常，跳过本轮循环: {exc}")
 

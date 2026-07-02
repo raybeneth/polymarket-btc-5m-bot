@@ -149,7 +149,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
-MAX_DAILY_LOSS_USD: float = 10.0       # halt if daily P&L < -$10
+MAX_DAILY_LOSS_USD: float = 20.0       # halt if daily P&L < -$10
 
 
 # ──────────────────────────────────────────────

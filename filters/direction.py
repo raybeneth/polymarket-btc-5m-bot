@@ -153,15 +153,21 @@ def _compute_momentum_score() -> tuple[float, dict]:
 
 def _compute_ob_imbalance_score(yes_book: OrderBook, no_book: OrderBook) -> tuple[float, dict]:
     """
-    Compare buy pressure between YES and NO books.
-    Returns score [-100, +100]:
-      +100 = all volume piling into YES asks (people buying YES) → bullish
-      -100 = all volume piling into NO asks  (people buying NO)  → bearish
-    """
-    yes_imb = yes_book.imbalance(levels=5)  # [-1, +1]
-    no_imb = no_book.imbalance(levels=5)    # [-1, +1]
+    Compare demand pressure between the YES and NO books.
 
-    # net = how much more YES is being bought than NO
+    Each book's imbalance is +1 when bid-heavy (demand/support → that token
+    is being bid up) and -1 when ask-heavy (supply/overhang → that token is
+    being pressured down). See OrderBook.imbalance.
+
+    Returns score [-100, +100]:
+      +100 = strong demand for YES relative to NO → bullish (buy YES)
+      -100 = strong demand for NO  relative to YES → bearish (buy NO)
+    """
+    yes_imb = yes_book.imbalance(levels=5)  # [-1, +1], + = YES bid-heavy (bullish)
+    no_imb = no_book.imbalance(levels=5)    # [-1, +1], + = NO  bid-heavy (bearish)
+
+    # net = YES demand minus NO demand. YES support is bullish, NO support is
+    # bearish, so subtracting no_imb correctly pulls the score toward NO.
     net = yes_imb - no_imb  # range [-2, +2]
     score = max(-100.0, min(100.0, net * 50.0))
 

@@ -181,22 +181,25 @@ def get_stats() -> dict:
     }
 
 
-def get_recent_closed(limit: int = 50) -> list[dict]:
-    """Most recently closed positions, newest first, for dashboard history."""
+def get_recent_closed(limit: Optional[int] = 50) -> list[dict]:
+    """
+    Closed positions, newest first, for the dashboard.
+    limit=None returns the full history (used by the cumulative P&L chart).
+    """
+    base_sql = """
+        SELECT order_id, mode, side, entry_price, exit_price, shares,
+               pnl, result, exit_reason, opened_at, closed_at
+        FROM positions
+        WHERE status='CLOSED'
+        ORDER BY closed_at DESC
+    """
     conn = _get_pool().connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT order_id, mode, side, entry_price, exit_price, shares,
-                       pnl, result, exit_reason, opened_at, closed_at
-                FROM positions
-                WHERE status='CLOSED'
-                ORDER BY closed_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
+            if limit is None:
+                cur.execute(base_sql)
+            else:
+                cur.execute(base_sql + " LIMIT %s", (limit,))
             rows = cur.fetchall()
     finally:
         conn.close()

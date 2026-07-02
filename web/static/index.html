@@ -4,17 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Polymarket BTC 5min Bot</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root {
-    --bg: #0d1117;
-    --card: #161b22;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --text-dim: #8b949e;
-    --accent: #58a6ff;
-    --green: #3fb950;
-    --red: #f85149;
-    --yellow: #d29922;
+    --bg:       #0f1a20;
+    --card:     #162530;
+    --border:   #1e303c;
+    --text:     #c9d1d9;
+    --text-dim: #7a9aaa;
+    --accent:   #27a69a;
+    --green:    #27a69a;
+    --red:      #ef5350;
+    --yellow:   #d29922;
     --font: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -22,11 +23,11 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--font);
-    font-size: 13px;
+    font-size: 12px;
     min-height: 100vh;
   }
 
-  /* Header */
+  /* ── Header ─────────────────────────────── */
   .header {
     display: flex;
     align-items: center;
@@ -35,23 +36,19 @@
     border-bottom: 1px solid var(--border);
     background: var(--card);
   }
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
+  .header-left { display: flex; align-items: center; gap: 16px; }
   .logo {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 1px;
   }
   .mode-badge {
-    background: rgba(88, 166, 255, 0.15);
+    background: rgba(39, 166, 154, 0.15);
     color: var(--accent);
     padding: 2px 10px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
   }
@@ -60,58 +57,77 @@
     align-items: center;
     gap: 20px;
     color: var(--text-dim);
-    font-size: 12px;
+    font-size: 11px;
   }
-  .btc-price {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text);
-  }
+  .btc-price { font-size: 17px; font-weight: 700; color: var(--text); }
   .conn-dot {
     display: inline-block;
     width: 8px; height: 8px;
     border-radius: 50%;
     margin-right: 6px;
   }
-  .conn-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .conn-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .conn-dot.off { background: var(--red); }
 
-  /* Stats grid */
-  .stats {
+  /* ── Stats Row (50 / 50) ─────────────────── */
+  .stats-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: 1fr 1fr;
     gap: 1px;
     background: var(--border);
     border-bottom: 1px solid var(--border);
   }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
   .stat-card {
     background: var(--card);
-    padding: 16px 24px;
+    padding: 18px 24px;
   }
   .stat-label {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-bottom: 6px;
   }
-  .stat-value {
-    font-size: 22px;
-    font-weight: 700;
-  }
-  .stat-sub {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 4px;
-  }
+  .stat-value { font-size: 21px; font-weight: 700; }
+  .stat-sub { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
   .positive { color: var(--green); }
   .negative { color: var(--red); }
-  .neutral { color: var(--text); }
+  .neutral  { color: var(--text); }
 
-  /* Section */
-  .section {
-    border-bottom: 1px solid var(--border);
+  /* ── Chart card ─────────────────────────── */
+  .chart-card {
+    background: var(--card);
+    padding: 14px 18px 10px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .chart-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .chart-sub { font-size: 10px; color: var(--text-dim); }
+  .chart-wrap { flex: 1; position: relative; min-height: 120px; }
+
+  /* ── Section ─────────────────────────────── */
+  .section { border-bottom: 1px solid var(--border); }
   .section-header {
     display: flex;
     align-items: center;
@@ -121,22 +137,19 @@
     border-bottom: 1px solid var(--border);
   }
   .section-title {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--accent);
     text-transform: uppercase;
     letter-spacing: 1px;
   }
 
-  /* Positions table */
-  .positions-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
+  /* ── Tables ──────────────────────────────── */
+  .positions-table { width: 100%; border-collapse: collapse; }
   .positions-table th {
     text-align: left;
     padding: 8px 24px;
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -146,67 +159,58 @@
   .positions-table td {
     padding: 10px 24px;
     border-top: 1px solid var(--border);
-    font-size: 13px;
+    font-size: 12px;
   }
-  .positions-table tr:hover td {
-    background: rgba(88, 166, 255, 0.04);
-  }
+  .positions-table tr:hover td { background: rgba(39, 166, 154, 0.04); }
   .side-yes { color: var(--green); font-weight: 700; }
-  .side-no { color: var(--red); font-weight: 700; }
-  .empty-row {
-    text-align: center;
-    color: var(--text-dim);
-    padding: 24px !important;
-  }
+  .side-no  { color: var(--red);   font-weight: 700; }
+  /* Side column: keep arrow + YES/NO on one line, never wrap */
+  .positions-table th:first-child,
+  .positions-table td:first-child { white-space: nowrap; min-width: 72px; }
+  .empty-row { text-align: center; color: var(--text-dim); padding: 24px !important; }
 
-  /* Position history */
-  .history-container {
-    max-height: 400px;
-    overflow-y: auto;
-  }
+  /* Fixed height showing ~3 rows; the rest scrolls. Header stays sticky. */
+  .history-container { height: 140px; overflow-y: auto; }
   .history-container::-webkit-scrollbar { width: 6px; }
   .history-container::-webkit-scrollbar-track { background: var(--bg); }
   .history-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  .history-container thead th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
+  .history-container thead th { position: sticky; top: 0; z-index: 1; }
 
-  /* Log area */
+  /* ── Log area ────────────────────────────── */
   .log-container {
-    height: 340px;
-    overflow-y: auto;
-    padding: 8px 0;
-    background: var(--bg);
+    height: 340px; overflow-y: auto;
+    padding: 8px 0; background: var(--bg);
   }
   .log-container::-webkit-scrollbar { width: 6px; }
   .log-container::-webkit-scrollbar-track { background: var(--bg); }
   .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .log-line {
-    padding: 2px 24px;
-    font-size: 12px;
-    line-height: 1.7;
-    color: var(--text-dim);
-    white-space: nowrap;
+    padding: 2px 24px; font-size: 11px;
+    line-height: 1.7; color: var(--text-dim); white-space: nowrap;
   }
   .log-line:hover { background: rgba(255,255,255,0.02); }
-  .log-line .ts { color: var(--text-dim); margin-right: 8px; }
-  .log-line.signal { color: var(--accent); }
+  .log-line.signal     { color: var(--accent); }
   .log-line.open-trade { color: var(--green); }
-  .log-line.exit-win { color: var(--green); }
-  .log-line.exit-loss { color: var(--red); }
-  .log-line.warn { color: var(--yellow); }
-  .log-line.settle-win { color: var(--green); }
+  .log-line.exit-win   { color: var(--green); }
+  .log-line.exit-loss  { color: var(--red); }
+  .log-line.warn       { color: var(--yellow); }
+  .log-line.settle-win  { color: var(--green); }
   .log-line.settle-loss { color: var(--red); }
 
-  /* WS status */
-  .ws-status {
-    font-size: 11px;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
+
+  /* ── Tables row (side by side) ─────────────── */
+  .tables-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid var(--border);
   }
+  .tables-row .section {
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+    min-width: 0;
+  }
+  .tables-row .section:last-child { border-right: none; }
 </style>
 </head>
 <body>
@@ -230,75 +234,86 @@
   </div>
 </div>
 
-<!-- Stats -->
-<div class="stats">
-  <div class="stat-card">
-    <div class="stat-label">Today Trades</div>
-    <div class="stat-value neutral" id="todayTrades">0</div>
-    <div class="stat-sub">All time: <span id="allTrades">0</span></div>
+<!-- Stats (left 50%) + Chart (right 50%) -->
+<div class="stats-row">
+
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-label">Today Trades</div>
+      <div class="stat-value neutral" id="todayTrades">0</div>
+      <div class="stat-sub">All time: <span id="allTrades">0</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value neutral" id="winRate">0%</div>
+      <div class="stat-sub">W <span class="positive" id="wins">0</span> / L <span class="negative" id="losses">0</span> &nbsp; All: <span id="allWL">0/0</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Today P&amp;L</div>
+      <div class="stat-value" id="todayPnl">$0.00</div>
+      <div class="stat-sub">All time: <span id="allPnl">$0.00</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Markets</div>
+      <div class="stat-value neutral" id="markets">0</div>
+      <div class="stat-sub">active</div>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Win Rate</div>
-    <div class="stat-value neutral" id="winRate">0%</div>
-    <div class="stat-sub">W <span class="positive" id="wins">0</span> / L <span class="negative" id="losses">0</span> &nbsp; All: <span id="allWL">0/0</span></div>
+
+  <div class="chart-card">
+    <div class="chart-header">
+      <span class="chart-title">Cumulative P&amp;L Trend</span>
+      <span class="chart-sub" id="chartSub">—</span>
+    </div>
+    <div class="chart-wrap">
+      <div id="pnlChart" style="width:100%;height:100%"></div>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Today P&L</div>
-    <div class="stat-value" id="todayPnl">$0.00</div>
-    <div class="stat-sub">All time: <span id="allPnl">$0.00</span></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Markets</div>
-    <div class="stat-value neutral" id="markets">0</div>
-    <div class="stat-sub">active</div>
-  </div>
+
 </div>
 
-<!-- Positions -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Open Positions</span>
-    <span style="color:var(--text-dim);font-size:11px" id="posCount">0</span>
-  </div>
-  <table class="positions-table">
-    <thead>
-      <tr>
-        <th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th>
-        <th>Stop</th><th>Expiry</th><th>Order</th>
-      </tr>
-    </thead>
-    <tbody id="posBody">
-      <tr><td colspan="7" class="empty-row">No open positions</td></tr>
-    </tbody>
-  </table>
-</div>
+<!-- Open Positions + Position History (side by side) -->
+<div class="tables-row">
 
-<!-- Position History -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Position History</span>
-    <span style="color:var(--text-dim);font-size:11px" id="histCount">0</span>
-  </div>
-  <div class="history-container" id="historyContainer">
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">Open Positions</span>
+      <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
+    </div>
     <table class="positions-table">
       <thead>
-        <tr>
-          <th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th>
-          <th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th>
-        </tr>
+        <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
       </thead>
-      <tbody id="histBody">
-        <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+      <tbody id="posBody">
+        <tr><td colspan="7" class="empty-row">No open positions</td></tr>
       </tbody>
     </table>
   </div>
+
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">Position History</span>
+      <span style="color:var(--text-dim);font-size:10px" id="histCount">0</span>
+    </div>
+    <div class="history-container" id="historyContainer">
+      <table class="positions-table">
+        <thead>
+          <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
+        </thead>
+        <tbody id="histBody">
+          <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
 </div>
 
 <!-- Logs -->
 <div class="section">
   <div class="section-header">
     <span class="section-title">Live Log</span>
-    <span style="color:var(--text-dim);font-size:11px" id="logCount">0 lines</span>
+    <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
   </div>
   <div class="log-container" id="logContainer"></div>
 </div>
@@ -306,9 +321,103 @@
 <script>
 const $ = id => document.getElementById(id);
 
+// ── K-line Chart (lightweight-charts) ──────────
+let _lwChart = null;
+let _candleSeries = null;
+let _chartAnchored = false;  // becomes true after first scroll-to-latest
+
+function initChart() {
+  const container = $('pnlChart');
+  _lwChart = LightweightCharts.createChart(container, {
+    autoSize: true,
+    layout: {
+      background: { type: 'solid', color: '#162530' },
+      textColor: '#7a9aaa',
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      fontSize: 10,
+    },
+    grid: {
+      vertLines: { color: 'rgba(30,48,60,0.9)' },
+      horzLines: { color: 'rgba(30,48,60,0.9)' },
+    },
+    timeScale: {
+      timeVisible: true,
+      secondsVisible: false,
+      borderColor: '#1e303c',
+      barSpacing: 8,       // fixed tight spacing → candles hug each other like an exchange
+      minBarSpacing: 4,
+      rightOffset: 3,      // small gap after the latest candle
+      tickMarkFormatter: (t) => {
+        const d = new Date(t * 1000);
+        return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+      },
+    },
+    rightPriceScale: {
+      borderColor: '#1e303c',
+      scaleMargins: { top: 0.1, bottom: 0.1 },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Magnet,
+      vertLine: { color: '#27a69a', width: 1, style: 3 },
+      horzLine: { color: '#27a69a', width: 1, style: 3 },
+    },
+    handleScroll: true,    // drag to pan through full history
+    handleScale: true,     // wheel/pinch to zoom
+  });
+
+  _candleSeries = _lwChart.addCandlestickSeries({
+    upColor:       '#27a69a',
+    downColor:     '#ef5350',
+    borderVisible: false,
+    wickUpColor:   '#27a69a',
+    wickDownColor: '#ef5350',
+    priceFormat:   { type: 'price', precision: 2, minMove: 0.01 },  // cumulative USD P&L
+  });
+}
+
+function updateChart(history) {
+  if (!_lwChart) initChart();
+
+  // Use the FULL history, chronological (oldest → newest)
+  const trades = history.slice().reverse();
+  const now = Math.floor(Date.now() / 1000);
+
+  // Cumulative-P&L candles (equity curve): each candle OPENS where the
+  // previous one CLOSED. open = running total before this trade,
+  // close = running total after adding this trade's pnl.
+  //   pnl > 0 → close above open → green (curve steps up)
+  //   pnl < 0 → close below open → red   (curve steps down)
+  const seen = new Set();
+  let cum = 0;
+  const candles = trades
+    .filter(h => h.exit != null)
+    .map(h => {
+      let t = Math.floor(now - h.closed_ago);
+      while (seen.has(t)) t++;   // ensure strictly-increasing unique timestamps
+      seen.add(t);
+      const open = cum;
+      cum += h.pnl;
+      const close = cum;
+      return { time: t, open, high: Math.max(open, close), low: Math.min(open, close), close };
+    })
+    .sort((a, b) => a.time - b.time);
+
+  if (candles.length > 0) {
+    _candleSeries.setData(candles);
+    // Only jump to the latest on the first load; afterwards keep the user's
+    // pan/zoom position so 2s refreshes don't yank the view.
+    if (!_chartAnchored) {
+      _lwChart.timeScale().scrollToRealTime();
+      _chartAnchored = true;
+    }
+  }
+
+  const net = candles.length ? candles[candles.length - 1].close : 0;
+  $('chartSub').textContent = `${candles.length} trade${candles.length !== 1 ? 's' : ''} · 累计 ${net >= 0 ? '+' : ''}${net.toFixed(2)} USD`;
+}
+
 // ── WebSocket ──────────────────────────────────
 let ws = null;
-let reconnectTimer = null;
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -318,28 +427,21 @@ function connect() {
     $('wsDot').className = 'conn-dot on';
     $('wsLabel').textContent = 'connected';
   };
-
   ws.onclose = () => {
     $('wsDot').className = 'conn-dot off';
     $('wsLabel').textContent = 'reconnecting...';
-    reconnectTimer = setTimeout(connect, 2000);
+    setTimeout(connect, 2000);
   };
-
   ws.onerror = () => ws.close();
-
-  ws.onmessage = e => {
-    try { render(JSON.parse(e.data)); } catch(err) { console.error(err); }
-  };
+  ws.onmessage = e => { try { render(JSON.parse(e.data)); } catch(err) { console.error(err); } };
 }
 
-// ── Render ──────────────────────────────────────
+// ── Render ─────────────────────────────────────
 function render(d) {
   // BTC
-  if (d.btc_price) {
-    $('btcPrice').textContent = '$' + d.btc_price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  } else {
-    $('btcPrice').textContent = '--';
-  }
+  $('btcPrice').textContent = d.btc_price
+    ? '$' + d.btc_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '--';
   $('btcDot').className = 'conn-dot ' + (d.btc_connected ? 'on' : 'off');
 
   // Uptime
@@ -350,7 +452,7 @@ function render(d) {
     $('uptime').textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
-  // Stats — today
+  // Today stats
   const today = d.today || {};
   $('todayTrades').textContent = today.trades || 0;
   const w = today.wins || 0, l = today.losses || 0;
@@ -359,12 +461,11 @@ function render(d) {
   $('winRate').className = 'stat-value ' + (wr >= 50 ? 'positive' : wr > 0 ? 'negative' : 'neutral');
   $('wins').textContent = w;
   $('losses').textContent = l;
-
   const pnl = today.pnl || 0;
   $('todayPnl').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
   $('todayPnl').className = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
 
-  // Stats — all time
+  // All-time stats
   const all = d.all_time || {};
   $('allTrades').textContent = all.trades || 0;
   $('allWL').textContent = `${all.wins || 0}/${all.losses || 0}`;
@@ -375,42 +476,46 @@ function render(d) {
   // Markets
   $('markets').textContent = d.markets_count || 0;
 
-  // Positions
-  const positions = d.positions || [];
-  $('posCount').textContent = positions.length;
-  const tbody = $('posBody');
-  if (positions.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-row">No open positions</td></tr>';
-  } else {
-    tbody.innerHTML = positions.map(p => {
-      const cls = p.side === 'YES' ? 'side-yes' : 'side-no';
-      const arrow = p.side === 'YES' ? '&#9650;' : '&#9660;';
-      return `<tr>
-        <td class="${cls}">${arrow} ${p.side}</td>
-        <td>${p.entry.toFixed(3)}</td>
-        <td>${p.qty.toFixed(2)}</td>
-        <td>${p.hold}s</td>
-        <td>${p.stop.toFixed(3)}</td>
-        <td>${p.expiry}s</td>
-        <td style="color:var(--text-dim);font-size:11px">${p.order_id}</td>
-      </tr>`;
-    }).join('');
+  // Chart
+  const history = d.history || [];
+  if (history.length > 0) {
+    updateChart(history);
+  } else if (!pnlChart) {
+    initChart();
   }
 
-  // Position history (newest first)
-  const history = d.history || [];
+  // Open positions
+  const positions = d.positions || [];
+  $('posCount').textContent = positions.length;
+  $('posBody').innerHTML = positions.length === 0
+    ? '<tr><td colspan="7" class="empty-row">No open positions</td></tr>'
+    : positions.map(p => {
+        const cls = p.side === 'YES' ? 'side-yes' : 'side-no';
+        const arrow = p.side === 'YES' ? '&#9650;' : '&#9660;';
+        return `<tr>
+          <td class="${cls}">${arrow} ${p.side}</td>
+          <td>${p.entry.toFixed(3)}</td>
+          <td>${p.qty.toFixed(2)}</td>
+          <td>${p.hold}s</td>
+          <td>${p.stop.toFixed(3)}</td>
+          <td>${p.expiry}s</td>
+          <td style="color:var(--text-dim);font-size:10px">${p.order_id}</td>
+        </tr>`;
+      }).join('');
+
+  // Position history
   $('histCount').textContent = history.length;
   const histBody = $('histBody');
   if (history.length === 0) {
     histBody.innerHTML = '<tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>';
   } else {
-    const historyContainer = $('historyContainer');
-    const prevScroll = historyContainer.scrollTop;
+    const hc = $('historyContainer');
+    const prev = hc.scrollTop;
     histBody.innerHTML = history.map(h => {
       const cls = h.side === 'YES' ? 'side-yes' : 'side-no';
       const arrow = h.side === 'YES' ? '&#9650;' : '&#9660;';
       const pnlCls = h.pnl >= 0 ? 'positive' : 'negative';
-      const resultCls = h.result === 'WIN' ? 'positive' : h.result === 'LOSS' ? 'negative' : 'neutral';
+      const resCls = h.result === 'WIN' ? 'positive' : h.result === 'LOSS' ? 'negative' : 'neutral';
       return `<tr>
         <td class="${cls}">${arrow} ${h.side}</td>
         <td>${h.entry.toFixed(3)}</td>
@@ -418,41 +523,45 @@ function render(d) {
         <td>${h.qty.toFixed(2)}</td>
         <td>${h.hold}s</td>
         <td class="${pnlCls}">${h.pnl >= 0 ? '+' : ''}${h.pnl.toFixed(4)}</td>
-        <td class="${resultCls}">${h.result || '--'}</td>
+        <td class="${resCls}">${h.result || '--'}</td>
         <td style="color:var(--text-dim)">${h.reason || ''}</td>
-        <td>${h.closed_ago}s ago</td>
-        <td style="color:var(--text-dim);font-size:11px">${h.order_id}</td>
+        <td>${fmtAgo(h.closed_ago)}</td>
+        <td style="color:var(--text-dim);font-size:10px">${h.order_id}</td>
       </tr>`;
     }).join('');
-    historyContainer.scrollTop = prevScroll;
+    hc.scrollTop = prev;
   }
 
   // Logs
   const logs = d.logs || [];
-  const container = $('logContainer');
-  const wasAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 30;
-
-  container.innerHTML = logs.map(line => {
+  const lc = $('logContainer');
+  const atBottom = lc.scrollTop + lc.clientHeight >= lc.scrollHeight - 30;
+  lc.innerHTML = logs.map(line => {
     let cls = '';
-    if (line.includes('SIGNAL')) cls = 'signal';
-    else if (line.includes('OPEN')) cls = 'open-trade';
+    if      (line.includes('SIGNAL'))                          cls = 'signal';
+    else if (line.includes('OPEN'))                            cls = 'open-trade';
     else if (line.includes('EXIT') && line.includes('pnl=+')) cls = 'exit-win';
     else if (line.includes('EXIT') && line.includes('pnl=-')) cls = 'exit-loss';
     else if (line.includes('SETTLE') && line.includes('WIN')) cls = 'settle-win';
-    else if (line.includes('SETTLE') && line.includes('LOSS')) cls = 'settle-loss';
-    else if (line.includes('[W]')) cls = 'warn';
+    else if (line.includes('SETTLE') && line.includes('LOSS'))cls = 'settle-loss';
+    else if (line.includes('[W]'))                             cls = 'warn';
     return `<div class="log-line ${cls}">${escHtml(line)}</div>`;
   }).join('');
-
   $('logCount').textContent = logs.length + ' lines';
-
-  if (wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  }
+  if (atBottom) lc.scrollTop = lc.scrollHeight;
 }
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Format "seconds ago" into a compact relative label: 刚刚 / xxm前 / xxh前 / xx天前
+function fmtAgo(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  if (sec < 60)    return '刚刚';
+  if (sec < 3600)  return Math.floor(sec / 60) + 'm前';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h前';
+  return Math.floor(sec / 86400) + '天前';
 }
 
 connect();
