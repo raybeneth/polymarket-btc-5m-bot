@@ -171,10 +171,18 @@ def _build_web_state() -> dict:
             "target": round(target, 2) if target is not None else None,
         })
 
+    # Persistent chart reference: the open price of the CURRENT 5-min window
+    # (the level BTC must stay above/below for the ongoing up/down market to
+    # resolve). Always available even when we hold no position, so the dashboard
+    # can always show a target line — not only while a trade is open.
+    window_start = (int(now) // 300) * 300
+    btc_target = btc_price.get_price_at(window_start)
+
     return {
         "btc_price": btc_price.get_latest(),
         "btc_connected": btc_price.is_connected(),
         "btc_history": btc_price.get_chart_series(),
+        "btc_target": round(btc_target, 2) if btc_target is not None else None,
         "markets_count": len(get_active_markets()),
         "today": {
             "trades": state.trades_today,

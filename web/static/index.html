@@ -154,21 +154,29 @@
     white-space: pre-line;
   }
 
-  /* ── Stats Row (50 / 50) ─────────────────── */
+  /* ── Stats grid (full width; P&L chart removed) ─────────────────── */
   .stats-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     gap: 1px;
     background: var(--border);
     border-bottom: 1px solid var(--border);
   }
+  /* Two rows:  Today P&L | Win Rate   (top)
+                Today Trades | Markets (bottom, side by side) */
   .stats {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: repeat(2, 1fr);
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "pnl    wr"
+      "trades markets";
     gap: 1px;
     background: var(--border);
   }
+  .stats .stat-card:nth-child(1) { grid-area: trades; }   /* Today Trades */
+  .stats .stat-card:nth-child(2) { grid-area: wr; }       /* Win Rate */
+  .stats .stat-card:nth-child(3) { grid-area: pnl; }      /* Today P&L */
+  .stats .stat-card:nth-child(4) { grid-area: markets; }  /* Markets */
   .stat-card {
     background: var(--card);
     padding: 18px 24px;
@@ -211,37 +219,18 @@
   .chart-sub { font-size: 10px; color: var(--text-dim); }
   .chart-wrap { flex: 1; position: relative; min-height: 120px; }
 
-  /* ── BTC price vs target chart (full width, below the stats/P&L row) ── */
+  /* ── BTC 1m candlestick chart (full width, below the stats/P&L row) ── */
   .btc-chart-card { border-bottom: 1px solid var(--border); }
   .btc-chart-card .chart-wrap { height: 190px; flex: none; }
-
-  /* Live price dot at the head of the BTC line, with a soft radar-style
-     pulse — mirrors the "live tick" marker Polymarket shows on its charts. */
-  .btc-live-dot {
-    position: absolute;
-    width: 7px; height: 7px;
-    margin: -3.5px 0 0 -3.5px;
-    border-radius: 50%;
-    background: var(--yellow);
-    box-shadow: 0 0 5px rgba(210, 153, 34, 0.9);
-    pointer-events: none;
-    display: none;
-    z-index: 5;
-  }
-  .btc-live-dot::after {
-    content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    width: 7px; height: 7px;
-    margin: -3.5px 0 0 -3.5px;
-    border-radius: 50%;
-    background: rgba(210, 153, 34, 0.65);
-    animation: btcDotPulse 1.6s ease-out infinite;
-  }
-  @keyframes btcDotPulse {
-    0%   { transform: scale(1);   opacity: 0.75; }
-    75%  { transform: scale(3.4); opacity: 0; }
-    100% { transform: scale(3.4); opacity: 0; }
+  /* Target readout below the title, in yellow — replaces the label that used
+     to float on the dashed price line itself. */
+  .btc-target-label {
+    color: var(--yellow);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin: 0 0 8px;
+    flex-shrink: 0;
   }
 
   /* ── Section ─────────────────────────────── */
@@ -344,14 +333,13 @@
     .modal-card { padding: 16px 16px; max-height: 82vh; }
     .modal-body { font-size: 12px; line-height: 1.8; }
 
-    /* Stats(2×2) on top, chart below — no longer side by side */
-    .stats-row  { grid-template-columns: 1fr; }
+    /* Stats keep the 2×2 layout from the base rules, just tighter on phones. */
     .stat-card  { padding: 14px 16px; }
     .stat-value { font-size: 19px; }
-
-    /* Give the chart a usable fixed height once it's full-width */
-    .chart-card { height: 240px; }
     .chart-wrap { min-height: 0; }
+
+    /* BTC candlestick keeps its own fixed height below the stats grid */
+    .btc-chart-card { height: 240px; }
     .btc-chart-card .chart-wrap { height: 160px; }
 
     /* Open Positions above Position History — stacked, divided by a line */
@@ -414,7 +402,7 @@
   </div>
 </div>
 
-<!-- Stats (left 50%) + Chart (right 50%) -->
+<!-- Stats grid (P&L chart removed) -->
 <div class="stats-row">
 
   <div class="stats">
@@ -440,27 +428,17 @@
     </div>
   </div>
 
-  <div class="chart-card">
-    <div class="chart-header">
-      <span class="chart-title">Cumulative P&amp;L Trend</span>
-      <span class="chart-sub" id="chartSub">—</span>
-    </div>
-    <div class="chart-wrap">
-      <div id="pnlChart" style="width:100%;height:100%"></div>
-    </div>
-  </div>
-
 </div>
 
 <!-- BTC real-time price vs target (reference open price of active positions' market window) -->
 <div class="chart-card btc-chart-card">
   <div class="chart-header">
-    <span class="chart-title">BTC Price vs Target</span>
+    <span class="chart-title">BTC/USDT · 1minute · CEX</span>
     <span class="chart-sub" id="btcChartSub">—</span>
   </div>
+  <div class="btc-target-label" id="btcTargetLabel">Reference Target —</div>
   <div class="chart-wrap">
     <div id="btcChart" style="width:100%;height:100%"></div>
-    <div class="btc-live-dot" id="btcLiveDot"></div>
   </div>
 </div>
 
@@ -515,110 +493,15 @@
 <script>
 const $ = id => document.getElementById(id);
 
-// ── K-line Chart (lightweight-charts) ──────────
-let _lwChart = null;
-let _candleSeries = null;
-let _chartAnchored = false;  // becomes true after first scroll-to-latest
-
-function initChart() {
-  const container = $('pnlChart');
-  _lwChart = LightweightCharts.createChart(container, {
-    autoSize: true,
-    layout: {
-      background: { type: 'solid', color: '#162530' },
-      textColor: '#7a9aaa',
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-      fontSize: 10,
-    },
-    grid: {
-      vertLines: { color: 'rgba(30,48,60,0.9)' },
-      horzLines: { color: 'rgba(30,48,60,0.9)' },
-    },
-    timeScale: {
-      timeVisible: true,
-      secondsVisible: false,
-      borderColor: '#1e303c',
-      barSpacing: 8,       // fixed tight spacing → candles hug each other like an exchange
-      minBarSpacing: 4,
-      rightOffset: 3,      // small gap after the latest candle
-      tickMarkFormatter: (t) => {
-        const d = new Date(t * 1000);
-        return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-      },
-    },
-    rightPriceScale: {
-      borderColor: '#1e303c',
-      scaleMargins: { top: 0.1, bottom: 0.1 },
-    },
-    crosshair: {
-      mode: LightweightCharts.CrosshairMode.Magnet,
-      vertLine: { color: '#27a69a', width: 1, style: 3 },
-      horzLine: { color: '#27a69a', width: 1, style: 3 },
-    },
-    handleScroll: true,    // drag to pan through full history
-    handleScale: true,     // wheel/pinch to zoom
-  });
-
-  _candleSeries = _lwChart.addCandlestickSeries({
-    upColor:       '#27a69a',
-    downColor:     '#ef5350',
-    borderVisible: false,
-    wickUpColor:   '#27a69a',
-    wickDownColor: '#ef5350',
-    priceFormat:   { type: 'price', precision: 2, minMove: 0.01 },  // cumulative USD P&L
-  });
-}
-
-function updateChart(history) {
-  if (!_lwChart) initChart();
-
-  // Use the FULL history, chronological (oldest → newest)
-  const trades = history.slice().reverse();
-  const now = Math.floor(Date.now() / 1000);
-
-  // Cumulative-P&L candles (equity curve): each candle OPENS where the
-  // previous one CLOSED. open = running total before this trade,
-  // close = running total after adding this trade's pnl.
-  //   pnl > 0 → close above open → green (curve steps up)
-  //   pnl < 0 → close below open → red   (curve steps down)
-  const seen = new Set();
-  let cum = 0;
-  const candles = trades
-    .filter(h => h.exit != null)
-    .map(h => {
-      let t = Math.floor(now - h.closed_ago);
-      while (seen.has(t)) t++;   // ensure strictly-increasing unique timestamps
-      seen.add(t);
-      const open = cum;
-      cum += h.pnl;
-      const close = cum;
-      return { time: t, open, high: Math.max(open, close), low: Math.min(open, close), close };
-    })
-    .sort((a, b) => a.time - b.time);
-
-  if (candles.length > 0) {
-    _candleSeries.setData(candles);
-    // Only jump to the latest on the first load; afterwards keep the user's
-    // pan/zoom position so 2s refreshes don't yank the view.
-    if (!_chartAnchored) {
-      _lwChart.timeScale().scrollToRealTime();
-      _chartAnchored = true;
-    }
-  }
-
-  const net = candles.length ? candles[candles.length - 1].close : 0;
-  $('chartSub').textContent = `${candles.length} trade${candles.length !== 1 ? 's' : ''} · 累计 ${net >= 0 ? '+' : ''}${net.toFixed(2)} USD`;
-}
-
-// ── BTC price vs target chart (line + horizontal target price-lines) ──
+// ── BTC 1m candlestick chart (exchange-style, live current candle + target lines) ──
 let _btcChart = null;
 let _btcSeries = null;
 let _btcChartAnchored = false;
-let _btcPriceLines = {};   // order_id -> priceLine handle, so we can remove stale ones
+let _btcWindowLine = null; // the single "Target" price-line handle (current 5min-window lock)
 let _btcTargets = [];      // current target prices — folded into the price-scale autoscale
                            // so a target line can never scroll out of the visible range
-let _btcLastPoint = null;  // {time, value} last point actually committed to the series
-let _btcAnimHandle = null; // current requestAnimationFrame id, if an animation is in flight
+let _btcCandles = new Map(); // minute-open-ts (s) -> {time,open,high,low,close}
+let _btcKlineTimer = null;   // self-rescheduling kline-refresh timer
 
 function initBtcChart() {
   const container = $('btcChart');
@@ -636,7 +519,7 @@ function initBtcChart() {
     },
     timeScale: {
       timeVisible: true,
-      secondsVisible: true,
+      secondsVisible: false,
       borderColor: '#1e303c',
       rightOffset: 3,
     },
@@ -653,12 +536,13 @@ function initBtcChart() {
     handleScale: true,
   });
 
-  _btcSeries = _btcChart.addLineSeries({
-    color: '#e8b339',
-    lineWidth: 2,
-    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    lastValueVisible: true,
-    priceLineVisible: false,
+  _btcSeries = _btcChart.addCandlestickSeries({
+    upColor:       '#27a69a',
+    downColor:     '#ef5350',
+    borderVisible: false,
+    wickUpColor:   '#27a69a',
+    wickDownColor: '#ef5350',
+    priceFormat:   { type: 'price', precision: 2, minMove: 0.01 },
     // Price lines (targets) don't influence autoscale on their own, so a target
     // far from the current BTC range would sit off-screen. Extend the computed
     // range to always enclose every active target, guaranteeing each target
@@ -675,124 +559,104 @@ function initBtcChart() {
     },
   });
 
-  // Keep the live dot glued to the last point whenever the user pans/zooms,
-  // and on window resize (chart width changes -> pixel coords change).
-  _btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-    if (_btcLastPoint) positionBtcDot(_btcLastPoint.time, _btcLastPoint.value);
-  });
-  window.addEventListener('resize', () => {
-    if (_btcLastPoint) positionBtcDot(_btcLastPoint.time, _btcLastPoint.value);
-  });
+  loadBtcKlines();   // self-reschedules: fast until history backfills, then every 60s
 }
 
-function positionBtcDot(time, value) {
-  const dot = $('btcLiveDot');
-  if (!_btcChart || !_btcSeries || !dot) return;
-  const x = _btcChart.timeScale().timeToCoordinate(time);
-  const y = _btcSeries.priceToCoordinate(value);
-  if (x == null || y == null) { dot.style.display = 'none'; return; }
-  dot.style.display = 'block';
-  dot.style.left = x + 'px';
-  dot.style.top = y + 'px';
-}
-
-// Ease the last point from its previous value to the newly-received one
-// instead of snapping — mirrors Polymarket's live chart, where the most
-// recent tick visibly glides into place while everything behind it is fixed.
-function animateBtcLastPoint(time, fromValue, toValue) {
-  if (_btcAnimHandle) cancelAnimationFrame(_btcAnimHandle);
-  const duration = 700;
-  const t0 = performance.now();
-
-  function step(now) {
-    const t = Math.min(1, (now - t0) / duration);
-    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
-    const value = fromValue + (toValue - fromValue) * eased;
-    _btcSeries.update({ time, value });
-    positionBtcDot(time, value);
-    if (t < 1) {
-      _btcAnimHandle = requestAnimationFrame(step);
-    } else {
-      _btcAnimHandle = null;
-      _btcLastPoint = { time, value: toValue };
-    }
-  }
-  _btcAnimHandle = requestAnimationFrame(step);
-}
-
-function updateBtcChart(history, positions) {
-  if (!_btcChart) initBtcChart();
-
-  let last = null;
-  if (history && history.length) {
-    const seen = new Set();
-    const points = [];
-    for (const [t, p] of history) {
-      const time = Math.floor(t);
-      if (seen.has(time)) continue;   // lightweight-charts requires strictly-increasing unique times
-      seen.add(time);
-      points.push({ time, value: p });
-    }
-    points.sort((a, b) => a.time - b.time);
-
-    if (points.length) {
-      const newLast = points[points.length - 1];
-      last = newLast.value;
-
-      if (!_btcLastPoint) {
-        // First data we've ever received — draw everything immediately,
-        // nothing to animate from yet.
-        _btcSeries.setData(points);
-        _btcLastPoint = newLast;
-        positionBtcDot(newLast.time, newLast.value);
-      } else {
-        // Commit all history except the newest point as-is (their values are
-        // already final), holding the last point at its previous displayed
-        // value — then animate just that point up to the fresh reading.
-        const fromValue = _btcLastPoint.value;
-        const settled = points.slice(0, -1).concat([{ time: newLast.time, value: fromValue }]);
-        _btcSeries.setData(settled);
-        if (newLast.time === _btcLastPoint.time && newLast.value === _btcLastPoint.value) {
-          positionBtcDot(newLast.time, newLast.value);
-        } else {
-          animateBtcLastPoint(newLast.time, fromValue, newLast.value);
+// Pull recent 1m klines from the backend (which proxies the exchange REST API)
+// and seed the candle map. Finalized candles are authoritative; the in-progress
+// current minute keeps whatever live values we've accumulated from the WS price.
+//
+// On first entry the backend cache may still be empty (its own fetch hasn't
+// landed yet), so we retry quickly until the historical candles show up, then
+// drop to a slow steady refresh that just corrects the newest closed candle.
+async function loadBtcKlines() {
+  let got = false;
+  try {
+    const res = await fetch('/api/klines');
+    if (res.ok) {
+      const klines = await res.json();
+      if (Array.isArray(klines) && klines.length) {
+        const curMin = Math.floor(Date.now() / 1000 / 60) * 60;
+        for (const k of klines) {
+          const t = k.time;
+          if (t >= curMin) continue;   // don't let a stale kline stomp the live candle
+          _btcCandles.set(t, { time: t, open: k.open, high: k.high, low: k.low, close: k.close });
+        }
+        got = _btcCandles.size > 0;
+        _btcSeries.setData(sortedBtcCandles());
+        if (!_btcChartAnchored) {
+          _btcChart.timeScale().scrollToRealTime();
+          _btcChartAnchored = true;
         }
       }
+    }
+  } catch (e) { /* non-fatal — live candle still renders from the WS price */ }
+  // Keep polling fast (3s) until the historical backfill arrives, then relax to 60s.
+  clearTimeout(_btcKlineTimer);
+  _btcKlineTimer = setTimeout(loadBtcKlines, got ? 60000 : 3000);
+}
 
-      if (!_btcChartAnchored) {
-        _btcChart.timeScale().scrollToRealTime();
-        _btcChartAnchored = true;
-      }
+function sortedBtcCandles() {
+  return Array.from(_btcCandles.values()).sort((a, b) => a.time - b.time);
+}
+
+function updateBtcChart(price, target, positions) {
+  if (!_btcChart) initBtcChart();
+
+  // Fold the latest spot tick into the CURRENT minute's candle so it fluctuates
+  // in real time like an exchange chart: open = prior candle's close (or this
+  // price on first tick), high/low track extremes, close = latest price.
+  let last = null;
+  if (price != null && isFinite(price)) {
+    last = price;
+    const m = Math.floor(Date.now() / 1000 / 60) * 60;
+    let c = _btcCandles.get(m);
+    if (!c) {
+      const prev = _btcCandles.get(m - 60);
+      const open = prev ? prev.close : price;
+      c = { time: m, open, high: Math.max(open, price), low: Math.min(open, price), close: price };
+    } else {
+      c.high = Math.max(c.high, price);
+      c.low = Math.min(c.low, price);
+      c.close = price;
+    }
+    _btcCandles.set(m, c);
+    _btcSeries.update(c);   // single-candle update: smooth, no full redraw
+    if (!_btcChartAnchored) {
+      _btcChart.timeScale().scrollToRealTime();
+      _btcChartAnchored = true;
     }
   }
 
-  // Sync one dashed target price-line per currently open position, drawn
-  // across the full chart width — the level BTC needs to stay above/below
-  // for that position to win. Drop lines for positions that have since
-  // closed so the chart doesn't accumulate stale reference levels.
-  const activeIds = new Set((positions || []).map(p => p.order_id));
-  for (const id of Object.keys(_btcPriceLines)) {
-    if (!activeIds.has(id)) {
-      _btcSeries.removePriceLine(_btcPriceLines[id]);
-      delete _btcPriceLines[id];
-    }
-  }
+  // A single yellow "Target" line — the price the current 5-min window locks
+  // against. The 5-min window start is always a 1m-candle boundary, so the
+  // target is the OPEN of the candle at window_start — which we always have
+  // from the loaded klines (no dependency on the backend spot buffer, which
+  // is empty right after a restart). Fall back to the backend value if needed.
+  const winStart = Math.floor(Date.now() / 1000 / 300) * 300;
+  const winCandle = _btcCandles.get(winStart);
+  const effTarget = winCandle ? winCandle.open : target;
+
   _btcTargets = [];
-  (positions || []).forEach(p => {
-    if (p.target == null) return;
-    _btcTargets.push(p.target);
-    if (_btcPriceLines[p.order_id]) {
-      _btcSeries.removePriceLine(_btcPriceLines[p.order_id]);
-    }
-    _btcPriceLines[p.order_id] = _btcSeries.createPriceLine({
-      price: p.target,
-      color: p.side === 'YES' ? '#27a69a' : '#ef5350',
+  if (effTarget != null && isFinite(effTarget)) {
+    _btcTargets.push(effTarget);
+    if (_btcWindowLine) _btcSeries.removePriceLine(_btcWindowLine);
+    _btcWindowLine = _btcSeries.createPriceLine({
+      price: effTarget,
+      color: '#e8b339',
       lineWidth: 2,
       lineStyle: LightweightCharts.LineStyle.Dashed,
-      axisLabelVisible: true,
-      title: `${p.side} 目标`,
+      axisLabelVisible: true,    // keep the yellow price badge on the axis; only the
+                                 // on-line "Target" text moved to the label above
     });
-  });
+    $('btcTargetLabel').textContent = 'Target $' + effTarget.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  } else {
+    if (_btcWindowLine) {
+      _btcSeries.removePriceLine(_btcWindowLine);
+      _btcWindowLine = null;
+    }
+    $('btcTargetLabel').textContent = 'Target —';
+  }
 
   $('btcChartSub').textContent = last != null
     ? '$' + last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -859,19 +723,14 @@ function render(d) {
   // Markets
   $('markets').textContent = d.markets_count || 0;
 
-  // Chart
+  // Position history (used by the history table below)
   const history = d.history || [];
-  if (history.length > 0) {
-    updateChart(history);
-  } else if (!pnlChart) {
-    initChart();
-  }
 
   // Open positions
   const positions = d.positions || [];
 
-  // BTC price vs target chart
-  updateBtcChart(d.btc_history || [], positions);
+  // BTC live 1m candlestick chart (current candle driven by the latest spot tick)
+  updateBtcChart(d.btc_price, d.btc_target, positions);
 
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0

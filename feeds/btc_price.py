@@ -16,6 +16,7 @@ import urllib.request
 from collections import deque
 from typing import Optional
 
+import aiohttp
 import websockets
 from websockets_proxy import Proxy, proxy_connect
 
@@ -59,12 +60,80 @@ _SOURCES = {
     "okx": (_OKX_WS_URL, _OKX_SUBSCRIBE_MSG, _parse_okx, "OKX"),
 }
 
+# ── 1-minute kline (candlestick) REST endpoints, one per source ──
+# The dashboard renders an exchange-style 1m candlestick chart; the WS trade
+# stream only gives us raw ticks, so we pull recent 1m klines over REST to fill
+# the chart, then the frontend keeps the current minute's candle live from the
+# WS spot price. Both exchanges accept limit up to (Binance 1000 / OKX 300);
+# 180 candles = 3h is plenty to fill and pan the chart.
+_KLINE_LIMIT = 180
+_BINANCE_KLINE_URL = (
+    f"https://api.binance.com/api/v3/klines"
+    f"?symbol=BTCUSDT&interval=1m&limit={_KLINE_LIMIT}"
+)
+_OKX_KLINE_URL = (
+    f"https://www.okx.com/api/v5/market/candles"
+    f"?instId=BTC-USDT&bar=1m&limit={_KLINE_LIMIT}"
+)
+
+
+def _parse_binance_klines(data) -> list[dict]:
+    """Binance /klines -> [{time, open, high, low, close}] (oldest first already)."""
+    out = []
+    for k in data or []:
+        try:
+            out.append({
+                "time": int(k[0]) // 1000,          # open time, ms -> s
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+            })
+        except (KeyError, IndexError, ValueError):
+            continue
+    return out
+
+
+def _parse_okx_klines(data) -> list[dict]:
+    """OKX /market/candles -> [{time, open, high, low, close}] (API returns newest first)."""
+    rows = (data or {}).get("data") or []
+    out = []
+    for k in rows:
+        try:
+            out.append({
+                "time": int(k[0]) // 1000,          # open time, ms -> s
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+            })
+        except (KeyError, IndexError, ValueError):
+            continue
+    out.sort(key=lambda c: c["time"])               # oldest first for the chart
+    return out
+
+
+# name -> (kline_rest_url, parse_fn)
+_KLINE_SOURCES = {
+    "binance": (_BINANCE_KLINE_URL, _parse_binance_klines),
+    "okx": (_OKX_KLINE_URL, _parse_okx_klines),
+}
+
 # Rolling buffer: (unix_timestamp_float, price_float)
 # Keep 10 minutes of history so direction signals have enough lookback
 _MAX_HISTORY_SECONDS = 600
 _price_history: deque[tuple[float, float]] = deque()
 _latest_price: Optional[float] = None
 _connected: bool = False
+
+# Recent 1-minute klines for the dashboard candlestick chart, oldest first.
+# Refreshed periodically from the exchange REST API by _run_klines().
+_klines: list[dict] = []
+
+
+def get_klines() -> list[dict]:
+    """Return a copy of the cached 1m klines (oldest first) for the dashboard."""
+    return list(_klines)
 
 
 def get_latest() -> Optional[float]:
@@ -206,12 +275,68 @@ async def _run_feed() -> None:
             backoff = min(backoff * 2, 30)
 
 
+async def _run_klines() -> None:
+    """
+    Periodically pull recent 1m klines from the exchange REST API into `_klines`.
+    Fetch once on startup, then refresh every 60s so the most-recently-closed
+    candle is corrected/added. Respects PROXY_ENABLED like the WS feed.
+
+    Failures are non-fatal (dashboard just shows the live candle built from the
+    WS spot price until klines arrive), so errors are logged at debug level.
+    """
+    global _klines
+
+    url, parse_fn = _KLINE_SOURCES.get(
+        BTC_PRICE_SOURCE, _KLINE_SOURCES["binance"]
+    )
+
+    # Klines follow PROXY_ENABLED just like the price feed and Polymarket layer:
+    # when False we connect directly. Note the exchange REST kline endpoints
+    # (api.binance.com / www.okx.com) can be geo-blocked even where the price
+    # WebSocket (stream.binance.com) is reachable directly — so from a blocked
+    # region the chart needs PROXY_ENABLED=true to fetch history.
+    proxy_url = None
+    if PROXY_ENABLED:
+        proxies = urllib.request.getproxies()
+        proxy_url = proxies.get("https") or proxies.get("http")
+
+    timeout = aiohttp.ClientTimeout(total=10)
+    warned = False
+    while True:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, proxy=proxy_url) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+            klines = parse_fn(data)
+            if not klines:
+                raise ValueError("空数据")
+            _klines = klines
+            if warned:
+                log.info(f"K线数据已恢复 ({BTC_PRICE_SOURCE}，共{len(klines)}根)")
+                warned = False
+        except Exception as exc:
+            # First failure gets a visible warning (with a proxy hint) so an
+            # empty chart is never an unexplained mystery; repeats stay at debug.
+            if not warned:
+                hint = "" if PROXY_ENABLED else " — PROXY_ENABLED=false 且该交易所REST可能被墙，如需K线请开启代理"
+                log.warning(f"K线获取失败 ({BTC_PRICE_SOURCE}){hint}: {exc}")
+                warned = True
+            else:
+                log.debug(f"K线获取重试失败 ({BTC_PRICE_SOURCE}): {exc}")
+        # Once we have data, refresh slowly (just to correct the newest closed
+        # candle). Until then, retry quickly so the chart backfills soon after
+        # startup rather than waiting a full minute for the first history.
+        await asyncio.sleep(60 if _klines else 5)
+
+
 async def start_feed() -> None:
     """
     Launch the price feed as a background asyncio task.
     Call once at bot startup; it runs forever.
     """
     asyncio.create_task(_run_feed(), name="btc_price_feed")
+    asyncio.create_task(_run_klines(), name="btc_klines")
     # Wait until first price arrives before returning
     for _ in range(100):
         if _latest_price is not None:

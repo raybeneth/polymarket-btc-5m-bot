@@ -59,6 +59,14 @@ async def _handle_api_state(request: web.Request) -> web.Response:
     return web.json_response(_get_snapshot())
 
 
+async def _handle_api_klines(request: web.Request) -> web.Response:
+    # Recent 1m klines for the dashboard's BTC candlestick chart. Served on its
+    # own endpoint (fetched by the frontend on load + every 60s) rather than in
+    # the 2s WS broadcast, since ~180 candles per push would bloat the payload.
+    from feeds import btc_price
+    return web.json_response(btc_price.get_klines())
+
+
 async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -125,6 +133,7 @@ async def start_web_server() -> None:
     app = web.Application()
     app.router.add_get("/", _handle_index)
     app.router.add_get("/api/state", _handle_api_state)
+    app.router.add_get("/api/klines", _handle_api_klines)
     app.router.add_get("/ws", _handle_ws)
     app.router.add_static("/static/", _STATIC_DIR)
 
