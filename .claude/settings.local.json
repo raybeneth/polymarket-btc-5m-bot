@@ -11,7 +11,12 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('main OK'\\)\")",
       "Bash(python:*)",
       "Read(//c/Users/Think/E:/PythonProject/**)",
-      "Read(//c/Users/Think/**)"
+      "Read(//c/Users/Think/**)",
+      "Bash(python -m py_compile config.py main.py filters/direction.py execution/order_manager.py)",
+      "Bash(python -c ' *)",
+      "Bash(ls -la *.log)",
+      "Bash(find . -maxdepth 2 -iname \"*.log\")",
+      "Bash(python -m py_compile config.py main.py filters/direction.py)"
     ]
   }
 }

@@ -111,10 +111,16 @@ DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
 # High consistency = genuine trend; low consistency = choppy/noisy.
 DIRECTION_CONSISTENCY_WINDOW: float = 60.0    # seconds to look back for consistency
 DIRECTION_CONSISTENCY_HIGH: float = 0.80      # ≥80% agreement = trending → lower dir threshold
-DIRECTION_CONSISTENCY_LOW: float = 0.50       # <50% = choppy → skip entirely
+DIRECTION_CONSISTENCY_LOW: float = 0.50       # ≥50% = MED tier boundary (no longer a hard skip)
+DIRECTION_CONSISTENCY_FLOOR: float = 0.30     # <30% = pure noise → hard skip (only real cutoff left)
 
-# CEX macro trend — confirm direction using 1m kline closes
-DIRECTION_MACRO_FLAT_THRESHOLD: float = 0.05  # % change below this = flat (no trend signal); 0.05% ≈ $50 at BTC $100k
+# Reversal guard — last-look freshness check performed immediately before
+# order execution (not a duplicate of the 60s consistency window above).
+# Looks at BTC price movement over this short horizon; if it has already
+# reversed hard against our intended side, we abandon this attempt instead
+# of firing into a stale signal. Matters more now that STOP_LOSS is disabled
+# (a wrong entry rides to full settlement instead of a partial stop-loss exit).
+DIRECTION_REVERSAL_GUARD_WINDOW: float = 12.0  # seconds
 
 
 # ──────────────────────────────────────────────
@@ -167,7 +173,8 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 # TRADE SIZING
 # ──────────────────────────────────────────────
-TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade
+TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade (HIGH tier = 100%)
+TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 20.0       # halt if daily P&L < -$10
 
@@ -184,6 +191,8 @@ MAX_DAILY_LOSS_USD: float = 20.0       # halt if daily P&L < -$10
 #   entry 0.45 → delta=0.09, stop at 0.36
 #   entry 0.55 → delta=0.11, stop at 0.44
 #   entry 0.65 → delta=0.13, stop at 0.52
+STOP_LOSS_ENABLED: bool = os.getenv("STOP_LOSS_ENABLED", "false").lower() == "true"
+TAKE_PROFIT_ENABLED: bool = os.getenv("TAKE_PROFIT_ENABLED", "false").lower() == "true"
 STOP_LOSS_RATIO: float = 0.20         # sell if best_bid <= entry_price * (1 - ratio)
 TAKE_PROFIT_DELTA: float = 0.15       # sell if best_bid >= entry_price + 0.15
 FORCE_EXIT_BEFORE_EXPIRY: int = 30    # force exit when ≤30s remain before market settlement
@@ -216,7 +225,7 @@ SCORE_WEIGHTS: dict = {
     "spread":    0.00,     # pass/fail gate only — no score contribution (near-constant ~85 inflated combined)
     "chase":     0.00,     # pass/fail gate only — no score contribution (near-constant ~100 inflated combined)
 }
-MIN_COMBINED_SCORE: float = 55.0      # minimum composite score (now only direction+odds+timing)
+MIN_COMBINED_SCORE: float = 45.0      # minimum composite score (now only direction+odds+timing); lowered 55→45 since tiered sizing (LOW/MED/HIGH) now absorbs weaker signals instead of a hard skip
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
 
 

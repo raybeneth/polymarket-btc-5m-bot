@@ -27,8 +27,10 @@ from config import (
     MIN_COMBINED_SCORE,
     MIN_TIMING_FILTER_SCORE,
     TRADE_SIZE_USD,
+    TRADE_SIZE_LOW_TIER_RATIO,
     DIRECTION_CONSISTENCY_HIGH,
     DIRECTION_CONSISTENCY_LOW,
+    DIRECTION_CONSISTENCY_FLOOR,
     STOP_LOSS_RATIO,
     TradeDecision,
 )
@@ -56,6 +58,10 @@ _recent_closed: list = []
 # Cache of btc_target per 5-min window_start timestamp, so the dashboard
 # target price doesn't jitter as ticks enter/leave the rolling buffer.
 _target_cache: dict[int, float] = {}
+
+# Last time the direction-filter skip/tier funnel summary was printed.
+_last_stats_report: float = 0.0
+STATS_REPORT_INTERVAL: float = 300.0  # 5 minutes
 
 
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
@@ -85,31 +91,17 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
     side = dir_result.details["direction"]
     consistency = dir_result.details.get("consistency", 0.0)
-    macro_trend = dir_result.details.get("macro_trend", "FLAT")
+    raw_dir = abs(dir_result.details.get("score_raw", 0))
+    strong_signal = dir_result.score >= 25.0  # raw ≥ ~40
 
-    # Gate A: Macro trend contradiction — never trade against the CEX kline trend
-    macro_contradicts = (
-        (macro_trend == "UP" and side == "NO") or
-        (macro_trend == "DOWN" and side == "YES")
-    )
-    if macro_contradicts:
-        log.info(f"[{mid}] 跳过宏观趋势矛盾: macro={macro_trend} vs side={side} (dir={dir_result.details.get('score_raw',0):.0f})")
-        return
-
-    # Gate B: Direction consistency — dynamic threshold replaces fixed hard floor
-    if consistency >= DIRECTION_CONSISTENCY_HIGH:      # ≥80%: trending
-        min_dir_score = 6.0     # raw ≥ ~25 is enough in a clear trend
-    elif consistency >= DIRECTION_CONSISTENCY_LOW:     # ≥50%: moderate
-        min_dir_score = 19.0    # raw ≥ ~35, need stronger signal
-    else:
-        log.info(f"[{mid}] 跳过方向不一致: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_LOW:.0%} (dir={dir_result.details.get('score_raw',0):.0f})")
-        return                  # <50%: too choppy, skip entirely
-
-    if dir_result.score < min_dir_score:
-        log.info(
-            f"[{mid}] 跳过方向: score={dir_result.score:.0f} < {min_dir_score:.0f} "
-            f"(consistency={consistency:.0%})"
-        )
+    # Gate: only true noise is a hard skip now. Everything else proceeds and
+    # gets sized by confidence tier below (LOW/MED/HIGH) instead of being
+    # rejected outright — the old consistency<50% hard floor and the dir_score
+    # sub-thresholds were redundant re-checks of the same signal, producing a
+    # cliff effect without adding information (see docs/optimizations/008).
+    if consistency < DIRECTION_CONSISTENCY_FLOOR:
+        direction.record_skip("noise_skip")
+        log.info(f"[{mid}] 跳过噪声: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_FLOOR:.0%} (dir={raw_dir:.0f})")
         return
 
     book = yes_book if side == "YES" else no_book
@@ -160,17 +152,35 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         log.debug(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
         return
 
-    # Confidence tier → trade size
-    macro_confirms = (
-        (macro_trend == "UP" and side == "YES") or
-        (macro_trend == "DOWN" and side == "NO")
-    )
-    if combined_score >= 60 and consistency >= DIRECTION_CONSISTENCY_HIGH and macro_confirms:
-        trade_size = TRADE_SIZE_USD           # 100% — high confidence
+    # Confidence tier → trade size. Only noise (checked above) is a hard skip;
+    # every other passed signal fires, sized by how much it's trusted.
+    # HIGH requires direction itself to be strong (filter≥20) AND persistent
+    # (consistency≥80%), not just odds+timing carrying the combined score.
+    if (combined_score >= 60 and dir_result.score >= 20
+            and consistency >= DIRECTION_CONSISTENCY_HIGH):
+        trade_size = TRADE_SIZE_USD                        # 100%
         tier = "HIGH"
-    else:
-        trade_size = TRADE_SIZE_USD * 0.5     # 50% — medium confidence
+    elif consistency >= DIRECTION_CONSISTENCY_LOW or strong_signal:
+        trade_size = TRADE_SIZE_USD * 0.5                  # 50%
         tier = "MED"
+    else:
+        trade_size = TRADE_SIZE_USD * TRADE_SIZE_LOW_TIER_RATIO  # 25%
+        tier = "LOW"
+    direction.record_skip(tier.lower())
+
+    # Reversal guard — last-look freshness check right before order placement.
+    # Distinct from the 60s consistency window above: this only asks "has price
+    # already moved against us in the last few seconds since we computed the
+    # signal?" Matters more now that STOP_LOSS is disabled — a stale entry
+    # rides to full settlement instead of exiting at a partial loss.
+    reversed_, rev_details = direction.check_reversal(side, time.time())
+    if reversed_:
+        direction.record_skip("reversal_guard")
+        log.info(
+            f"[{mid}] 反转哨兵拦截: side={side} move={rev_details.get('move_pct')}% "
+            f"threshold={rev_details.get('threshold_pct')}%"
+        )
+        return
 
     # TRADE SIGNAL
     token_id = market.yes_token_id if side == "YES" else market.no_token_id
@@ -186,7 +196,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     log.info(
         f"SIGNAL {'^ ' if side == 'YES' else 'v '}{side} @ {entry_price:.3f} "
         f"x{payout:.2f} score={combined_score:.1f} [{scores_str}] "
-        f"consist={consistency:.0%} macro={macro_trend} "
+        f"consist={consistency:.0%} "
         f"tier={tier} ${trade_size:.2f} "
         f"t={elapsed:.0f}s/{remaining:.0f}s"
     )
@@ -281,8 +291,9 @@ def _build_web_state() -> dict:
 
 
 async def main_loop() -> None:
-    global _history, _start_time, _recent_closed
+    global _history, _start_time, _recent_closed, _last_stats_report
     _start_time = time.time()
+    _last_stats_report = _start_time
 
     loop = asyncio.get_event_loop()
 
@@ -390,6 +401,21 @@ async def main_loop() -> None:
             cache_cutoff = int(time.time()) - 600
             for k in [k for k in _target_cache if k < cache_cutoff]:
                 del _target_cache[k]
+
+            # Periodic funnel visibility: NEUTRAL/noise skips were previously
+            # only log.debug (invisible at LOG_LEVEL=INFO), so trade-frequency
+            # tuning had no idea how big the top of the funnel was.
+            now_ts = time.time()
+            if now_ts - _last_stats_report >= STATS_REPORT_INTERVAL:
+                stats = direction.get_and_reset_skip_stats()
+                fired = stats["low"] + stats["med"] + stats["high"]
+                log.info(
+                    f"方向漏斗(近{STATS_REPORT_INTERVAL/60:.0f}分钟): "
+                    f"NEUTRAL={stats['neutral']} 噪声跳过={stats['noise_skip']} "
+                    f"反转拦截={stats['reversal_guard']} | "
+                    f"成交 LOW={stats['low']} MED={stats['med']} HIGH={stats['high']} (共{fired}笔)"
+                )
+                _last_stats_report = now_ts
 
             await asyncio.sleep(2.0)
 

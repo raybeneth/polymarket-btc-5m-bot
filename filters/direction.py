@@ -39,7 +39,7 @@ from config import (
     DIRECTION_VOL_SIGMA_FULL,
     DIRECTION_VOL_FLOOR_PCT,
     DIRECTION_CONSISTENCY_WINDOW,
-    DIRECTION_MACRO_FLAT_THRESHOLD,
+    DIRECTION_REVERSAL_GUARD_WINDOW,
 )
 
 
@@ -48,6 +48,26 @@ from config import (
 # ─────────────────────────────────────────────
 # Stores (timestamp, combined_score)
 _score_history: deque = deque(maxlen=100)
+
+# ─────────────────────────────────────────────
+# Skip/tier stats — makes the funnel visible (previously only log.debug,
+# which is invisible under LOG_LEVEL=INFO). main.py prints a summary
+# periodically and resets this via get_and_reset_skip_stats().
+# ─────────────────────────────────────────────
+_skip_stats: dict = {
+    "neutral": 0, "noise_skip": 0, "low": 0, "med": 0, "high": 0, "reversal_guard": 0,
+}
+
+
+def record_skip(reason: str) -> None:
+    _skip_stats[reason] = _skip_stats.get(reason, 0) + 1
+
+
+def get_and_reset_skip_stats() -> dict:
+    snapshot = dict(_skip_stats)
+    for k in _skip_stats:
+        _skip_stats[k] = 0
+    return snapshot
 
 
 def _get_smoothed_score(current_score: float, now: float) -> float:
@@ -182,7 +202,7 @@ def _compute_ob_imbalance_score(yes_book: OrderBook, no_book: OrderBook) -> tupl
 
 
 # ─────────────────────────────────────────────
-# Direction consistency & macro trend
+# Direction consistency
 # ─────────────────────────────────────────────
 
 def _compute_consistency(now: float) -> tuple[float, int, int]:
@@ -205,31 +225,44 @@ def _compute_consistency(now: float) -> tuple[float, int, int]:
     return same / len(recent), same, len(recent)
 
 
-def _compute_macro_trend() -> tuple[str, float]:
+# ─────────────────────────────────────────────
+# Reversal guard — last-look freshness check
+# ─────────────────────────────────────────────
+
+def check_reversal(side: str, now: float) -> tuple[bool, dict]:
     """
-    Compute medium-term BTC trend from recent 1m klines (CEX data).
-    Uses the last 3 closed candles to determine direction.
-    Returns (trend_direction, magnitude_pct):
-      trend_direction: "UP" | "DOWN" | "FLAT"
-      magnitude_pct: absolute % change over the window
+    Last-look check performed immediately before order execution — distinct
+    from _compute_consistency() (60s historical average). This looks only at
+    the last DIRECTION_REVERSAL_GUARD_WINDOW seconds of BTC ticks to catch the
+    case where price has already reversed against `side` in the brief gap
+    between signal computation and order placement.
+
+    Returns (reversed, details). reversed=True means the move against us
+    already exceeds 1 short-horizon sigma of realised volatility — not just
+    noise — so this entry attempt should be abandoned (not downgraded).
     """
-    klines = btc_price.get_klines()
-    if len(klines) < 4:
-        return "FLAT", 0.0
+    prices_raw = btc_price.get_prices_since(now - DIRECTION_REVERSAL_GUARD_WINDOW)
+    if len(prices_raw) < 3:
+        return False, {"samples": len(prices_raw)}
 
-    # Last 3 closed candles (exclude current partial candle at [-1])
-    recent = klines[-4:-1]
-    start_close = recent[0]["close"]
-    end_close = recent[-1]["close"]
+    oldest_price = prices_raw[0][1]
+    latest_price = prices_raw[-1][1]
+    if oldest_price <= 0:
+        return False, {"samples": len(prices_raw)}
 
-    if start_close <= 0:
-        return "FLAT", 0.0
+    move_pct = (latest_price - oldest_price) / oldest_price * 100.0
+    threshold_pct = _realised_vol_pct(prices_raw)  # 1 short-horizon sigma
 
-    change_pct = (end_close - start_close) / start_close * 100.0
+    reversed_ = (
+        (side == "YES" and move_pct <= -threshold_pct)
+        or (side == "NO" and move_pct >= threshold_pct)
+    )
 
-    if abs(change_pct) < DIRECTION_MACRO_FLAT_THRESHOLD:
-        return "FLAT", abs(change_pct)
-    return ("UP" if change_pct > 0 else "DOWN"), abs(change_pct)
+    return reversed_, {
+        "move_pct": round(move_pct, 4),
+        "threshold_pct": round(threshold_pct, 4),
+        "samples": len(prices_raw),
+    }
 
 
 # ─────────────────────────────────────────────
@@ -270,11 +303,11 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
     elif smoothed <= -DIRECTION_MIN_SCORE:
         direction = "NO"
 
-    # Compute consistency and macro trend (available in details for main.py)
+    # Compute consistency (available in details for main.py)
     consistency, consist_same, consist_total = _compute_consistency(now)
-    macro_trend, macro_magnitude = _compute_macro_trend()
 
     if direction == "NEUTRAL":
+        record_skip("neutral")
         return FilterResult(
             passed=False,
             score=abs_score,
@@ -290,8 +323,6 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
                 "orderbook": ob_details,
                 "consistency": round(consistency, 2),
                 "consistency_samples": consist_total,
-                "macro_trend": macro_trend,
-                "macro_magnitude": round(macro_magnitude, 4),
             },
         )
 
@@ -311,7 +342,5 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
             "orderbook": ob_details,
             "consistency": round(consistency, 2),
             "consistency_samples": consist_total,
-            "macro_trend": macro_trend,
-            "macro_magnitude": round(macro_magnitude, 4),
         },
     )

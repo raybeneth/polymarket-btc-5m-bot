@@ -27,6 +27,8 @@ from config import (
     TRADE_SIZE_USD,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
+    STOP_LOSS_ENABLED,
+    TAKE_PROFIT_ENABLED,
     STOP_LOSS_RATIO,
     TAKE_PROFIT_DELTA,
     FORCE_EXIT_BEFORE_EXPIRY,
@@ -301,9 +303,9 @@ async def check_early_exits(session) -> None:
         )
 
         exit_reason = None
-        if trigger_price <= stop_price:
+        if STOP_LOSS_ENABLED and trigger_price <= stop_price:
             exit_reason = "STOP_LOSS"
-        elif trigger_price >= tp_price:
+        elif TAKE_PROFIT_ENABLED and trigger_price >= tp_price:
             exit_reason = "TAKE_PROFIT"
         elif force_exit:
             exit_reason = "FORCE_EXIT"
