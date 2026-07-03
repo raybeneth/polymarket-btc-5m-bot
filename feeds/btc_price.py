@@ -60,20 +60,21 @@ _SOURCES = {
     "okx": (_OKX_WS_URL, _OKX_SUBSCRIBE_MSG, _parse_okx, "OKX"),
 }
 
-# ── 1-minute kline (candlestick) REST endpoints, one per source ──
-# The dashboard renders an exchange-style 1m candlestick chart; the WS trade
-# stream only gives us raw ticks, so we pull recent 1m klines over REST to fill
-# the chart, then the frontend keeps the current minute's candle live from the
-# WS spot price. Both exchanges accept limit up to (Binance 1000 / OKX 300);
-# 180 candles = 3h is plenty to fill and pan the chart.
-_KLINE_LIMIT = 180   # 1m × 180 = 3h of history; OKX request clamped to 300 below
+# ── 5-minute kline (candlestick) REST endpoints, one per source ──
+# The dashboard renders an exchange-style 5m candlestick chart — matching the
+# 5-min up/down market window, so one candle = one market's lifetime. The WS
+# trade stream only gives us raw ticks, so we pull recent 5m klines over REST
+# to fill the chart, then the frontend keeps the current 5m bucket's candle
+# live from the WS spot price. Both exchanges accept limit up to (Binance 1000
+# / OKX 300); 180 candles = 15h is plenty to fill and pan the chart.
+_KLINE_LIMIT = 180   # 5m × 180 = 15h of history; OKX request clamped to 300 below
 _BINANCE_KLINE_URL = (
     f"https://api.binance.com/api/v3/klines"
-    f"?symbol=BTCUSDT&interval=1m&limit={_KLINE_LIMIT}"
+    f"?symbol=BTCUSDT&interval=5m&limit={_KLINE_LIMIT}"
 )
 _OKX_KLINE_URL = (
     f"https://www.okx.com/api/v5/market/candles"
-    f"?instId=BTC-USDT&bar=1m&limit={min(_KLINE_LIMIT, 300)}"
+    f"?instId=BTC-USDT&bar=5m&limit={min(_KLINE_LIMIT, 300)}"
 )
 
 
@@ -126,13 +127,13 @@ _price_history: deque[tuple[float, float]] = deque()
 _latest_price: Optional[float] = None
 _connected: bool = False
 
-# Recent 1-minute klines for the dashboard candlestick chart, oldest first.
+# Recent 5-minute klines for the dashboard candlestick chart, oldest first.
 # Refreshed periodically from the exchange REST API by _run_klines().
 _klines: list[dict] = []
 
 
 def get_klines() -> list[dict]:
-    """Return a copy of the cached 1m klines (oldest first) for the dashboard."""
+    """Return a copy of the cached 5m klines (oldest first) for the dashboard."""
     return list(_klines)
 
 
@@ -277,7 +278,7 @@ async def _run_feed() -> None:
 
 async def _run_klines() -> None:
     """
-    Periodically pull recent 1m klines from the exchange REST API into `_klines`.
+    Periodically pull recent 5m klines from the exchange REST API into `_klines`.
     Fetch once on startup, then refresh every 60s so the most-recently-closed
     candle is corrected/added. Respects PROXY_ENABLED like the WS feed.
 

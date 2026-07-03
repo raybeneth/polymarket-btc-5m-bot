@@ -332,7 +332,7 @@
   .chart-sub { font-size: 10px; color: var(--text-dim); }
   .chart-wrap { flex: 1; position: relative; min-height: 120px; }
 
-  /* ── BTC 1m candlestick chart (full width, below the stats/P&L row) ── */
+  /* ── BTC 5m candlestick chart (full width, below the stats/P&L row) ── */
   .btc-chart-card { border-bottom: 1px solid var(--border); }
   .btc-chart-card .chart-wrap { height: 460px; flex: none; }
   /* Target readout below the title, in yellow — replaces the label that used
@@ -345,6 +345,18 @@
     margin: 0 0 8px;
     flex-shrink: 0;
   }
+
+  /* 5-min countdown badge — pinned to the right edge of the chart, positioned
+     in JS just below the native last-price label so it visually "follows"
+     the price up/down as the current candle moves. Hidden until a valid
+     price/coordinate is available. */
+  /* Countdown appended inline after the "Reference Target $xxx" text. */
+  .btc-countdown {
+    margin-left: 10px;
+    color: var(--text-dim);
+    font-weight: 700;
+  }
+  .btc-countdown:empty { display: none; }
 
   /* ── Section ─────────────────────────────── */
   .section { border-bottom: 1px solid var(--border); }
@@ -413,7 +425,7 @@
 
   .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
 
-  /* ── Main row: BTC chart (left) + Open Positions (right) ─────── */
+  /* ── Main row: BTC chart (left) + Live Log (right) ─────── */
   .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -426,6 +438,10 @@
     min-width: 0;
   }
   .main-row > *:last-child { border-right: none; }
+  /* Live Log gets a fixed height matched to the chart's plot area (chart-wrap).
+     Grid stretch makes the two cards' outer boxes equal; any blank below the
+     log is the same --bg colour, so there's no visible seam. */
+  .main-row > .section .log-container { height: 460px; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -456,10 +472,12 @@
     .btc-chart-card { height: 400px; }
     .btc-chart-card .chart-wrap { height: 330px; }
 
-    /* Stack the main row (chart above Open Positions), divided by a line */
+    /* Stack the main row (chart above Live Log), divided by a line */
     .main-row { grid-template-columns: 1fr; }
     .main-row > .btc-chart-card,
     .main-row > .section { border-right: none; border-bottom: 1px solid var(--border); }
+    /* Stacked Live Log keeps its own shorter fixed height on phones */
+    .main-row > .section .log-container { height: 240px; }
 
     /* Wide tables scroll sideways instead of squishing/wrapping */
     .table-scroll,
@@ -469,7 +487,53 @@
     .positions-table td { padding: 8px 12px; white-space: nowrap; }
     .empty-row { padding: 16px !important; }
 
+    /* Show ~6 rows before scrolling instead of the desktop default of ~3
+       (mobile has more vertical room to spare, and stacked layout makes a
+       taller history panel less costly than on the 50/50 desktop row). */
+    .history-container { height: 280px; }
+
     .section-header { padding: 10px 14px; }
+
+    /* Collapsible sections (mobile only): tap the header to fold/unfold the
+       body with a smooth transition instead of an instant display:none.
+       history-container/log-container already have a fixed pixel height, so
+       we transition `height` straight to 0. table-scroll's height depends on
+       row count, so it uses the CSS grid fr-track technique (1fr <-> 0fr),
+       which animates smoothly to/from an auto content height without ever
+       needing to know the pixel value up front. */
+    .section-header { cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+    .section-title::after {
+      content: '▾';
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 9px;
+      color: var(--text-dim);
+      transition: transform 0.25s ease;
+    }
+    .section.collapsed .section-title::after { transform: rotate(-90deg); }
+    .section.collapsed .section-header { border-bottom: none; }
+
+    .history-container,
+    .log-container { transition: height 0.25s ease, padding 0.25s ease; }
+    .section.collapsed .history-container,
+    .section.collapsed .log-container {
+      height: 0;
+      /* log-container has vertical padding (8px 0); with box-sizing:border-box
+         that padding is a floor under height:0, leaving a visible gap unless
+         it's zeroed too. history-container has no padding, so this is a no-op
+         for it but harmless. */
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+
+    .table-scroll {
+      display: grid;
+      grid-template-rows: 1fr;
+      transition: grid-template-rows 0.25s ease;
+      overflow-y: hidden;
+    }
+    .table-scroll .positions-table { min-height: 0; }
+    .section.collapsed .table-scroll { grid-template-rows: 0fr; }
 
     /* Logs: shorter, allow long lines to scroll horizontally */
     .log-container { height: 240px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -554,7 +618,7 @@
     <div class="stat-card">
       <div class="stat-label">Win Rate</div>
       <div class="stat-value neutral" id="winRate">0%</div>
-      <div class="stat-sub">W <span class="positive" id="wins">0</span> / L <span class="negative" id="losses">0</span> &nbsp; All: <span id="allWL">0/0</span></div>
+      <div class="stat-sub">W <span class="positive" id="wins">0</span> / L <span class="negative" id="losses">0</span> &nbsp; All: <span id="allWL">0/0</span> (<span id="allWinRate">0%</span>)</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Today P&amp;L</div>
@@ -570,37 +634,36 @@
 
 </div>
 
-<!-- Desktop: BTC chart (left) + Open Positions (right); mobile: stacked -->
+<!-- Desktop: BTC chart (left) + Live Log (right); mobile: stacked -->
 <div class="main-row">
 
   <div class="chart-card btc-chart-card">
     <div class="chart-header">
-      <span class="chart-title">BTC/USDT · 1minute · CEX</span>
+      <span class="chart-title">BTC/USDT · 5minute · CEX</span>
       <span class="chart-sub" id="btcChartSub">—</span>
     </div>
-    <div class="btc-target-label" id="btcTargetLabel">Reference Target —</div>
+    <div class="btc-target-label"><span id="btcTargetLabel">Reference Target —</span><span class="btc-countdown" id="btcCountdown"></span></div>
     <div class="chart-wrap">
       <div id="btcChart" style="width:100%;height:100%"></div>
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">Open Positions</span>
-      <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
-    </div>
-    <div class="table-scroll">
-      <table class="positions-table">
-        <thead>
-          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
-        </thead>
-        <tbody id="posBody">
-          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <!-- Open Positions — full width -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-title">Open Positions</span>
+    <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
   </div>
-
+  <div class="table-scroll">
+    <table class="positions-table">
+      <thead>
+        <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
+      </thead>
+      <tbody id="posBody">
+        <tr><td colspan="7" class="empty-row">No open positions</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <!-- Position History — full width -->
@@ -621,27 +684,56 @@
   </div>
 </div>
 
-<!-- Logs -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Live Log</span>
-    <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">Live Log</span>
+      <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
+    </div>
+    <div class="log-container" id="logContainer"></div>
   </div>
-  <div class="log-container" id="logContainer"></div>
+
 </div>
+
+
 
 <script>
 const $ = id => document.getElementById(id);
 
-// ── BTC 1m candlestick chart (exchange-style, live current candle + target lines) ──
+// ── BTC 5m candlestick chart (exchange-style, live current candle + target lines) ──
+// One candle = one 5-min up/down market window.
 let _btcChart = null;
 let _btcSeries = null;
 let _btcChartAnchored = false;
 let _btcWindowLine = null; // the single "Target" price-line handle (current 5min-window lock)
 let _btcTargets = [];      // current target prices — folded into the price-scale autoscale
                            // so a target line can never scroll out of the visible range
-let _btcCandles = new Map(); // minute-open-ts (s) -> {time,open,high,low,close}
+let _btcCandles = new Map(); // 5min-bucket-open-ts (s) -> {time,open,high,low,close}
 let _btcKlineTimer = null;   // self-rescheduling kline-refresh timer
+
+// Candle times are plain Unix epoch seconds (UTC) — shift by +8h and read back
+// with the UTC getters so the label is fixed at UTC+8 regardless of the
+// viewer's own system timezone (avoids relying on the browser's local tz,
+// and sidesteps DST since we're manually offsetting rather than using a
+// named timezone).
+function _fmtUtc8Time(time) {
+  const d = new Date((time + 8 * 3600) * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+// Countdown to the close of the current 5-min window (same boundary the
+// candles bucket on and Polymarket's market resolves on). Appended inline
+// after the "Reference Target $xxx" text; ticks every second on its own.
+function _updateBtcCountdownText() {
+  const el = $('btcCountdown');
+  if (!el) return;
+  const now = Date.now() / 1000;
+  const remaining = Math.max(0, 300 - (now % 300));
+  const m = Math.floor(remaining / 60);
+  const s = Math.floor(remaining % 60);
+  el.textContent = `· ${m}:${String(s).padStart(2, '0')}`;
+}
 
 function initBtcChart() {
   const container = $('btcChart');
@@ -653,6 +745,9 @@ function initBtcChart() {
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
       fontSize: 10,
     },
+    localization: {
+      timeFormatter: _fmtUtc8Time,   // crosshair time label
+    },
     grid: {
       vertLines: { color: 'rgba(30,48,60,0.9)' },
       horzLines: { color: 'rgba(30,48,60,0.9)' },
@@ -662,6 +757,8 @@ function initBtcChart() {
       secondsVisible: false,
       borderColor: '#1e303c',
       rightOffset: 3,
+      barSpacing: 10,   // a bit wider than the default (~6px) — slightly zoomed in
+      tickMarkFormatter: _fmtUtc8Time,   // axis tick labels, fixed at UTC+8
     },
     rightPriceScale: {
       borderColor: '#1e303c',
@@ -700,11 +797,35 @@ function initBtcChart() {
   });
 
   loadBtcKlines();   // self-reschedules: fast until history backfills, then every 60s
+
+  // Tick the inline countdown text every second, independent of price activity.
+  _updateBtcCountdownText();
+  setInterval(_updateBtcCountdownText, 1000);
 }
 
-// Pull recent 1m klines from the backend (which proxies the exchange REST API)
+// On first load only, position the most recent candle a bit right of dead
+// center (instead of flush against the right edge, which is scrollToRealTime()'s
+// default) — position is how many whitespace bars sit to the right of the last
+// candle, so a fraction below 0.5 nudges it right of the exact middle while
+// still leaving noticeably more history visible than the flush-right default.
+// getVisibleLogicalRange() already reflects the just-applied setData()/update()
+// synchronously, so no extra frame is needed.
+function _anchorBtcChartOnce() {
+  if (_btcChartAnchored) return;
+  _btcChartAnchored = true;
+  const range = _btcChart.timeScale().getVisibleLogicalRange();
+  if (range) {
+    const barsVisible = range.to - range.from;
+    _btcChart.timeScale().scrollToPosition(barsVisible * 0.4, false);
+  } else {
+    _btcChart.timeScale().scrollToRealTime();
+  }
+}
+
+// Pull recent 5m klines from the backend (which proxies the exchange REST API)
 // and seed the candle map. Finalized candles are authoritative; the in-progress
-// current minute keeps whatever live values we've accumulated from the WS price.
+// current 5-min bucket keeps whatever live values we've accumulated from the
+// WS price.
 //
 // On first entry the backend cache may still be empty (its own fetch hasn't
 // landed yet), so we retry quickly until the historical candles show up, then
@@ -716,18 +837,15 @@ async function loadBtcKlines() {
     if (res.ok) {
       const klines = await res.json();
       if (Array.isArray(klines) && klines.length) {
-        const curMin = Math.floor(Date.now() / 1000 / 60) * 60;
+        const curBucket = Math.floor(Date.now() / 1000 / 300) * 300;
         for (const k of klines) {
           const t = k.time;
-          if (t >= curMin) continue;   // don't let a stale kline stomp the live candle
+          if (t >= curBucket) continue;   // don't let a stale kline stomp the live candle
           _btcCandles.set(t, { time: t, open: k.open, high: k.high, low: k.low, close: k.close });
         }
         got = _btcCandles.size > 0;
         _btcSeries.setData(sortedBtcCandles());
-        if (!_btcChartAnchored) {
-          _btcChart.timeScale().scrollToRealTime();
-          _btcChartAnchored = true;
-        }
+        _anchorBtcChartOnce();
       }
     }
   } catch (e) { /* non-fatal — live candle still renders from the WS price */ }
@@ -740,16 +858,16 @@ function sortedBtcCandles() {
   return Array.from(_btcCandles.values()).sort((a, b) => a.time - b.time);
 }
 
-// Feed a spot price tick into the current-minute candle (called by both the
-// 2s WS render and the 700ms fast ticker).
+// Feed a spot price tick into the current 5-min bucket's candle (called by
+// both the 2s WS render and the 700ms fast ticker).
 function _tickCandle(price) {
   if (!_btcChart) initBtcChart();
   if (price == null || !isFinite(price)) return;
 
-  const m = Math.floor(Date.now() / 1000 / 60) * 60;
+  const m = Math.floor(Date.now() / 1000 / 300) * 300;
   let c = _btcCandles.get(m);
   if (!c) {
-    const prev = _btcCandles.get(m - 60);
+    const prev = _btcCandles.get(m - 300);
     const open = prev ? prev.close : price;
     c = { time: m, open, high: Math.max(open, price), low: Math.min(open, price), close: price };
   } else {
@@ -759,17 +877,14 @@ function _tickCandle(price) {
   }
   _btcCandles.set(m, c);
   _btcSeries.update(c);
-  if (!_btcChartAnchored) {
-    _btcChart.timeScale().scrollToRealTime();
-    _btcChartAnchored = true;
-  }
+  _anchorBtcChartOnce();
 }
 
 function updateBtcChart(price, target, positions) {
   if (!_btcChart) initBtcChart();
 
-  // Fold the latest spot tick into the CURRENT minute's candle so it fluctuates
-  // in real time like an exchange chart.
+  // Fold the latest spot tick into the CURRENT 5-min bucket's candle so it
+  // fluctuates in real time like an exchange chart.
   let last = null;
   if (price != null && isFinite(price)) {
     last = price;
@@ -777,10 +892,11 @@ function updateBtcChart(price, target, positions) {
   }
 
   // A single yellow "Target" line — the price the current 5-min window locks
-  // against. The 5-min window start is always a 1m-candle boundary, so the
-  // target is the OPEN of the candle at window_start — which we always have
-  // from the loaded klines (no dependency on the backend spot buffer, which
-  // is empty right after a restart). Fall back to the backend value if needed.
+  // against. Since candles are now 5-min buckets, the window start IS the
+  // candle boundary, so the target is simply the OPEN of the candle at
+  // window_start — which we always have from the loaded klines (no dependency
+  // on the backend spot buffer, which is empty right after a restart). Fall
+  // back to the backend value if needed.
   const winStart = Math.floor(Date.now() / 1000 / 300) * 300;
   const winCandle = _btcCandles.get(winStart);
   const effTarget = winCandle ? winCandle.open : target;
@@ -863,7 +979,10 @@ function render(d) {
   // All-time stats
   const all = d.all_time || {};
   $('allTrades').textContent = all.trades || 0;
-  $('allWL').textContent = `${all.wins || 0}/${all.losses || 0}`;
+  const allW = all.wins || 0, allL = all.losses || 0;
+  $('allWL').textContent = `${allW}/${allL}`;
+  const allWr = (allW + allL) > 0 ? Math.round(allW / (allW + allL) * 100) : 0;
+  $('allWinRate').textContent = allWr + '%';
   const allPnl = all.pnl || 0;
   $('allPnl').textContent = (allPnl >= 0 ? '+' : '') + '$' + allPnl.toFixed(2);
   $('allPnl').className = allPnl >= 0 ? 'positive' : 'negative';
@@ -877,7 +996,7 @@ function render(d) {
   // Open positions
   const positions = d.positions || [];
 
-  // BTC live 1m candlestick chart (current candle driven by the latest spot tick)
+  // BTC live 5m candlestick chart (current candle driven by the latest spot tick)
   updateBtcChart(d.btc_price, d.btc_target, positions);
 
   $('posCount').textContent = positions.length;
@@ -887,7 +1006,7 @@ function render(d) {
         const cls = p.side === 'YES' ? 'side-yes' : 'side-no';
         const arrow = p.side === 'YES' ? '&#9650;' : '&#9660;';
         return `<tr>
-          <td class="${cls}">${arrow} ${p.side}</td>
+          <td class="${cls}">${arrow} ${sideLabel(p.side)}</td>
           <td>${p.entry.toFixed(3)}</td>
           <td>${p.qty.toFixed(2)}</td>
           <td>${p.hold}s</td>
@@ -911,7 +1030,7 @@ function render(d) {
       const pnlCls = h.pnl >= 0 ? 'positive' : 'negative';
       const resCls = h.result === 'WIN' ? 'positive' : h.result === 'LOSS' ? 'negative' : 'neutral';
       return `<tr>
-        <td class="${cls}">${arrow} ${h.side}</td>
+        <td class="${cls}">${arrow} ${sideLabel(h.side)}</td>
         <td>${h.entry.toFixed(3)}</td>
         <td>${h.exit != null ? h.exit.toFixed(3) : '--'}</td>
         <td>${h.qty.toFixed(2)}</td>
@@ -947,6 +1066,12 @@ function render(d) {
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Display label only — internal side values stay YES/NO (drive color classes,
+// arrow direction, and match the DB/API contract); just the shown text changes.
+function sideLabel(side) {
+  return side === 'YES' ? 'UP' : side === 'NO' ? 'DOWN' : side;
 }
 
 // Format "seconds ago" into a compact relative label: 刚刚 / xxm前 / xxh前 / xx天前
@@ -1038,6 +1163,16 @@ document.addEventListener('keydown', e => {
   if (docModal.classList.contains('open')) closeDoc();
   else if (infoModal.classList.contains('open')) closeInfoModal();
   else if (drawer.classList.contains('open')) closeDrawer();
+});
+
+// Mobile: tap a section header (Position History / Open Positions / Live Log)
+// to collapse or expand its body. No-op on desktop. render() only rewrites the
+// body innerHTML, never the .section element, so the collapsed state persists.
+document.querySelectorAll('.section-header').forEach(h => {
+  h.addEventListener('click', () => {
+    if (!window.matchMedia('(max-width: 768px)').matches) return;
+    h.closest('.section').classList.toggle('collapsed');
+  });
 });
 
 connect();

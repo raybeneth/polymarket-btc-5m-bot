@@ -114,6 +114,15 @@ DIRECTION_CONSISTENCY_HIGH: float = 0.80      # ≥80% agreement = trending → 
 DIRECTION_CONSISTENCY_LOW: float = 0.50       # ≥50% = MED tier boundary (no longer a hard skip)
 DIRECTION_CONSISTENCY_FLOOR: float = 0.30     # <30% = pure noise → hard skip (only real cutoff left)
 
+# MED-tier magnitude floor (see docs/optimizations/009). Consistency alone
+# measures whether the SIGN has persisted, not whether the signal has any
+# real strength — a filter_score sitting near 0 can still read consistency
+# ≥50% by chance and would otherwise get the same 50% sizing as a genuinely
+# moderate signal. PAPER-25393563 (dir_score=1.9, consistency=64% → MED $5,
+# lost -4.27) is exactly this case. Requiring a small non-zero floor keeps
+# "persistent near-noise" out of MED — it falls through to LOW (25%) instead.
+DIRECTION_MED_MIN_SCORE: float = 10.0         # filter_score floor for the MED tier
+
 # Reversal guard — last-look freshness check performed immediately before
 # order execution (not a duplicate of the 60s consistency window above).
 # Looks at BTC price movement over this short horizon; if it has already
@@ -173,7 +182,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 # TRADE SIZING
 # ──────────────────────────────────────────────
-TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1.0"))  # per trade (HIGH tier = 100%)
+TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade (HIGH tier = 100%)
 TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 20.0       # halt if daily P&L < -$10

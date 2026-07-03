@@ -104,7 +104,7 @@ async def _handle_api_state(request: web.Request) -> web.Response:
 
 
 async def _handle_api_klines(request: web.Request) -> web.Response:
-    # Recent 1m klines for the dashboard's BTC candlestick chart. Served on its
+    # Recent 5m klines for the dashboard's BTC candlestick chart. Served on its
     # own endpoint (fetched by the frontend on load + every 60s) rather than in
     # the 2s WS broadcast, since ~180 candles per push would bloat the payload.
     from feeds import btc_price
