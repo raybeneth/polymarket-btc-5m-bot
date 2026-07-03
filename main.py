@@ -25,10 +25,10 @@ from config import (
     PAPER_TRADING,
     SCORE_WEIGHTS,
     MIN_COMBINED_SCORE,
-    MIN_DIRECTION_FILTER_SCORE,
     MIN_TIMING_FILTER_SCORE,
-    STRATEGY_SCORE_KEYS,
-    MIN_STRATEGY_SCORE,
+    TRADE_SIZE_USD,
+    DIRECTION_CONSISTENCY_HIGH,
+    DIRECTION_CONSISTENCY_LOW,
     STOP_LOSS_RATIO,
     TradeDecision,
 )
@@ -52,6 +52,10 @@ _start_time: float = 0.0
 
 # Most recently closed positions, newest first (refreshed each loop cycle)
 _recent_closed: list = []
+
+# Cache of btc_target per 5-min window_start timestamp, so the dashboard
+# target price doesn't jitter as ticks enter/leave the rolling buffer.
+_target_cache: dict[int, float] = {}
 
 
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
@@ -78,11 +82,36 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     if not dir_result.passed:
         log.debug(f"[{mid}] 跳过方向: 信号过弱 ({dir_result.details.get('score_raw', 0):.0f})")
         return
-    if dir_result.score < MIN_DIRECTION_FILTER_SCORE:
-        log.debug(f"[{mid}] 跳过方向下限: {dir_result.score:.0f} < {MIN_DIRECTION_FILTER_SCORE:.0f}")
-        return
 
     side = dir_result.details["direction"]
+    consistency = dir_result.details.get("consistency", 0.0)
+    macro_trend = dir_result.details.get("macro_trend", "FLAT")
+
+    # Gate A: Macro trend contradiction — never trade against the CEX kline trend
+    macro_contradicts = (
+        (macro_trend == "UP" and side == "NO") or
+        (macro_trend == "DOWN" and side == "YES")
+    )
+    if macro_contradicts:
+        log.info(f"[{mid}] 跳过宏观趋势矛盾: macro={macro_trend} vs side={side} (dir={dir_result.details.get('score_raw',0):.0f})")
+        return
+
+    # Gate B: Direction consistency — dynamic threshold replaces fixed hard floor
+    if consistency >= DIRECTION_CONSISTENCY_HIGH:      # ≥80%: trending
+        min_dir_score = 6.0     # raw ≥ ~25 is enough in a clear trend
+    elif consistency >= DIRECTION_CONSISTENCY_LOW:     # ≥50%: moderate
+        min_dir_score = 19.0    # raw ≥ ~35, need stronger signal
+    else:
+        log.info(f"[{mid}] 跳过方向不一致: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_LOW:.0%} (dir={dir_result.details.get('score_raw',0):.0f})")
+        return                  # <50%: too choppy, skip entirely
+
+    if dir_result.score < min_dir_score:
+        log.info(
+            f"[{mid}] 跳过方向: score={dir_result.score:.0f} < {min_dir_score:.0f} "
+            f"(consistency={consistency:.0%})"
+        )
+        return
+
     book = yes_book if side == "YES" else no_book
     entry_price = book.best_ask
     if entry_price is None:
@@ -104,43 +133,44 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         log.debug(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
-    # Filter 4: Spread
+    # Filter 4: Spread (pass/fail gate, no score contribution)
     spread_result = spread.check(book, side)
     if not spread_result.passed:
         log.debug(f"[{mid}] 跳过价差: {spread_result.reason}")
         return
 
-    # Filter 5: Chase
+    # Filter 5: Chase (pass/fail gate, no score contribution)
     chase_result = chase.check(book)
     if not chase_result.passed:
         log.debug(f"[{mid}] 跳过追单: {chase_result.reason}")
         return
 
-    # Combined score
+    # Combined score — only strategy filters (direction + odds + timing) contribute;
+    # spread/chase have weight 0 and serve as pass/fail gates above.
     filter_results = {
         "direction": dir_result, "odds": odds_result, "timing": timing_result,
         "spread": spread_result, "chase": chase_result,
     }
     combined_score = sum(
-        SCORE_WEIGHTS[name] * result.score for name, result in filter_results.items()
+        SCORE_WEIGHTS[name] * result.score
+        for name, result in filter_results.items()
+        if SCORE_WEIGHTS[name] > 0
     )
     if combined_score < MIN_COMBINED_SCORE:
         log.debug(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
         return
 
-    # Strategy-layer gate: direction+odds+timing (renormalised) must stand on
-    # their own, so the near-constant execution scores (spread/chase) can't lift
-    # a weak-strategy trade over the line. They remain pass/fail vetoes above.
-    strat_weight = sum(SCORE_WEIGHTS[k] for k in STRATEGY_SCORE_KEYS)
-    strategy_score = sum(
-        SCORE_WEIGHTS[k] * filter_results[k].score for k in STRATEGY_SCORE_KEYS
-    ) / strat_weight
-    if strategy_score < MIN_STRATEGY_SCORE:
-        log.debug(
-            f"[{mid}] 跳过策略层评分: {strategy_score:.1f} < {MIN_STRATEGY_SCORE} "
-            f"(dir/odds/timing 单独不达标，spread/chase 不参与凑分)"
-        )
-        return
+    # Confidence tier → trade size
+    macro_confirms = (
+        (macro_trend == "UP" and side == "YES") or
+        (macro_trend == "DOWN" and side == "NO")
+    )
+    if combined_score >= 60 and consistency >= DIRECTION_CONSISTENCY_HIGH and macro_confirms:
+        trade_size = TRADE_SIZE_USD           # 100% — high confidence
+        tier = "HIGH"
+    else:
+        trade_size = TRADE_SIZE_USD * 0.5     # 50% — medium confidence
+        tier = "MED"
 
     # TRADE SIGNAL
     token_id = market.yes_token_id if side == "YES" else market.no_token_id
@@ -148,6 +178,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         should_trade=True, side=side, market_id=market_id, token_id=token_id,
         entry_price=entry_price, combined_score=combined_score,
         filter_results=filter_results, market_end_ts=market.end_timestamp,
+        trade_size_usd=trade_size,
     )
 
     payout = 1.0 / entry_price if entry_price > 0 else 0
@@ -155,6 +186,8 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     log.info(
         f"SIGNAL {'^ ' if side == 'YES' else 'v '}{side} @ {entry_price:.3f} "
         f"x{payout:.2f} score={combined_score:.1f} [{scores_str}] "
+        f"consist={consistency:.0%} macro={macro_trend} "
+        f"tier={tier} ${trade_size:.2f} "
         f"t={elapsed:.0f}s/{remaining:.0f}s"
     )
 
@@ -175,7 +208,16 @@ def _build_web_state() -> dict:
         # Target = BTC price at the start of this market's own 5-min window —
         # the same reference point resolve_expired_positions() settles against,
         # i.e. the level BTC needs to stay above (YES) / below (NO) to win.
-        target = btc_price.get_price_at(pos.market_end_ts - 300) if pos.market_end_ts > 0 else None
+        # Cached so it doesn't jitter as ticks rotate through the buffer.
+        if pos.market_end_ts > 0:
+            tgt_key = int(pos.market_end_ts - 300)
+            target = _target_cache.get(tgt_key)
+            if target is None:
+                target = btc_price.get_price_at(pos.market_end_ts - 300)
+                if target is not None:
+                    _target_cache[tgt_key] = target
+        else:
+            target = None
         positions.append({
             "side": pos.side,
             "entry": pos.entry_price,
@@ -191,8 +233,13 @@ def _build_web_state() -> dict:
     # (the level BTC must stay above/below for the ongoing up/down market to
     # resolve). Always available even when we hold no position, so the dashboard
     # can always show a target line — not only while a trade is open.
+    # Cached per window so the target doesn't jitter as ticks enter/leave the buffer.
     window_start = (int(now) // 300) * 300
-    btc_target = btc_price.get_price_at(window_start)
+    btc_target = _target_cache.get(window_start)
+    if btc_target is None:
+        btc_target = btc_price.get_price_at(window_start)
+        if btc_target is not None:
+            _target_cache[window_start] = btc_target
 
     return {
         "btc_price": btc_price.get_latest(),
@@ -338,6 +385,11 @@ async def main_loop() -> None:
             # Clean up expired traded markets
             active_ids = set(markets.keys())
             _traded_markets.difference_update(_traded_markets - active_ids)
+
+            # Evict stale target cache entries (keep only last 10 minutes)
+            cache_cutoff = int(time.time()) - 600
+            for k in [k for k in _target_cache if k < cache_cutoff]:
+                del _target_cache[k]
 
             await asyncio.sleep(2.0)
 

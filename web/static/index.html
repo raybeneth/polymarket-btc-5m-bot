@@ -740,32 +740,40 @@ function sortedBtcCandles() {
   return Array.from(_btcCandles.values()).sort((a, b) => a.time - b.time);
 }
 
+// Feed a spot price tick into the current-minute candle (called by both the
+// 2s WS render and the 700ms fast ticker).
+function _tickCandle(price) {
+  if (!_btcChart) initBtcChart();
+  if (price == null || !isFinite(price)) return;
+
+  const m = Math.floor(Date.now() / 1000 / 60) * 60;
+  let c = _btcCandles.get(m);
+  if (!c) {
+    const prev = _btcCandles.get(m - 60);
+    const open = prev ? prev.close : price;
+    c = { time: m, open, high: Math.max(open, price), low: Math.min(open, price), close: price };
+  } else {
+    c.high = Math.max(c.high, price);
+    c.low = Math.min(c.low, price);
+    c.close = price;
+  }
+  _btcCandles.set(m, c);
+  _btcSeries.update(c);
+  if (!_btcChartAnchored) {
+    _btcChart.timeScale().scrollToRealTime();
+    _btcChartAnchored = true;
+  }
+}
+
 function updateBtcChart(price, target, positions) {
   if (!_btcChart) initBtcChart();
 
   // Fold the latest spot tick into the CURRENT minute's candle so it fluctuates
-  // in real time like an exchange chart: open = prior candle's close (or this
-  // price on first tick), high/low track extremes, close = latest price.
+  // in real time like an exchange chart.
   let last = null;
   if (price != null && isFinite(price)) {
     last = price;
-    const m = Math.floor(Date.now() / 1000 / 60) * 60;
-    let c = _btcCandles.get(m);
-    if (!c) {
-      const prev = _btcCandles.get(m - 60);
-      const open = prev ? prev.close : price;
-      c = { time: m, open, high: Math.max(open, price), low: Math.min(open, price), close: price };
-    } else {
-      c.high = Math.max(c.high, price);
-      c.low = Math.min(c.low, price);
-      c.close = price;
-    }
-    _btcCandles.set(m, c);
-    _btcSeries.update(c);   // single-candle update: smooth, no full redraw
-    if (!_btcChartAnchored) {
-      _btcChart.timeScale().scrollToRealTime();
-      _btcChartAnchored = true;
-    }
+    _tickCandle(price);
   }
 
   // A single yellow "Target" line — the price the current 5-min window locks
@@ -789,13 +797,13 @@ function updateBtcChart(price, target, positions) {
       axisLabelVisible: true,    // keep the yellow price badge on the axis; only the
                                  // on-line "Target" text moved to the label above
     });
-    $('btcTargetLabel').textContent = 'Target $' + effTarget.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    $('btcTargetLabel').textContent = 'Reference Target $' + effTarget.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   } else {
     if (_btcWindowLine) {
       _btcSeries.removePriceLine(_btcWindowLine);
       _btcWindowLine = null;
     }
-    $('btcTargetLabel').textContent = 'Target —';
+    $('btcTargetLabel').textContent = 'Reference Target —';
   }
 
   $('btcChartSub').textContent = last != null
@@ -965,7 +973,15 @@ function openDoc(title, markdown) {
   $('docBody').scrollTop = 0;
   docModal.classList.add('open');
 }
-function closeDoc() { docModal.classList.remove('open'); }
+let _autoOpenNum = null;  // track which optimization was auto-opened
+function closeDoc() {
+  // When closing an auto-opened optimization, mark as dismissed in localStorage
+  if (_autoOpenNum !== null) {
+    try { localStorage.setItem('dismissed_opt_' + _autoOpenNum, '1'); } catch (e) {}
+    _autoOpenNum = null;
+  }
+  docModal.classList.remove('open');
+}
 $('docClose').addEventListener('click', closeDoc);
 docModal.addEventListener('click', e => { if (e.target === docModal) closeDoc(); });
 
@@ -1000,9 +1016,19 @@ async function loadOptimizations() {
     // Strip the leading "NNN — " from the heading for the subtitle.
     const sub = r.title.replace(/^\s*\d+\s*[—-]\s*/, '');
     btn.innerHTML = `<span class="di-title">优化记录${r.num}</span><span class="di-sub">${escHtml(sub)}</span>`;
-    btn.addEventListener('click', () => { closeDrawer(); openDoc(`优化记录${r.num}`, r.markdown); });
+    btn.addEventListener('click', () => { closeDrawer(); _autoOpenNum = null; openDoc(`优化记录${r.num}`, r.markdown); });
     menu.appendChild(btn);
   });
+
+  // Auto-show the latest optimization record on first visit (per-record localStorage key)
+  if (recs.length > 0) {
+    const latest = recs[recs.length - 1];
+    const dismissed = localStorage.getItem('dismissed_opt_' + latest.num);
+    if (!dismissed) {
+      _autoOpenNum = latest.num;
+      openDoc(`优化记录${latest.num}`, latest.markdown);
+    }
+  }
 }
 loadOptimizations();
 
@@ -1015,6 +1041,61 @@ document.addEventListener('keydown', e => {
 });
 
 connect();
+
+// ── Fast price ticker (700ms) + smooth interpolation ────────────────
+// Polls /api/price at 700ms. Instead of jumping to the new price instantly,
+// we lerp from the previous price to the new one over ~600ms using
+// requestAnimationFrame with ease-out, so the candle and header price
+// glide smoothly between ticks.
+(function startFastTicker() {
+  let _animFrom = null;     // price at animation start
+  let _animTo = null;       // target price
+  let _animStart = 0;       // performance.now() when animation began
+  const ANIM_DUR = 600;     // ms — leave 100ms headroom before next tick
+
+  function _fmtPrice(p) {
+    return '$' + p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // Ease-out cubic: fast start, gentle arrival
+  function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+  let _rafId = 0;
+  function _animFrame(now) {
+    const elapsed = now - _animStart;
+    const t = Math.min(elapsed / ANIM_DUR, 1);
+    const p = _animFrom + (_animTo - _animFrom) * easeOut(t);
+
+    _tickCandle(p);
+    $('btcPrice').textContent = _fmtPrice(p);
+    $('btcChartSub').textContent = _fmtPrice(p);
+
+    if (t < 1) {
+      _rafId = requestAnimationFrame(_animFrame);
+    } else {
+      _rafId = 0;
+    }
+  }
+
+  function _startAnim(targetPrice) {
+    // Use current display price as the start; if no prior price, snap directly
+    _animFrom = (_animTo != null) ? _animTo : targetPrice;
+    _animTo = targetPrice;
+    _animStart = performance.now();
+    if (!_rafId) _rafId = requestAnimationFrame(_animFrame);
+  }
+
+  async function tick() {
+    try {
+      const res = await fetch('/api/price');
+      if (res.ok) {
+        const { p } = await res.json();
+        if (p != null && isFinite(p)) _startAnim(p);
+      }
+    } catch (e) { /* silent — WS broadcast is the primary source */ }
+  }
+  setInterval(tick, 700);
+})();
 </script>
 </body>
 </html>

@@ -32,11 +32,11 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 # ──────────────────────────────────────────────
 # MYSQL — position storage
 # ──────────────────────────────────────────────
-MYSQL_HOST: str = os.getenv("MYSQL_HOST", "192.168.0.103")
+MYSQL_HOST: str = os.getenv("MYSQL_HOST", "156.233.234.116")
 MYSQL_PORT: int = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
-MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot")
+MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "mysql_jpdBm6")
+MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot_test")
 
 # BTC spot price feed source. Binance WS can return HTTP 451 (geo-blocked)
 # depending on the server's region — switch source via env var, no code change.
@@ -106,6 +106,15 @@ DIRECTION_SMOOTH_WINDOW: float = 20.0  # seconds to average direction scores ove
 # Orderbook imbalance weight in combined direction score
 DIRECTION_OB_WEIGHT: float = 0.35     # 35% from orderbook imbalance
 DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
+
+# Direction consistency — measures how persistently readings agree on direction.
+# High consistency = genuine trend; low consistency = choppy/noisy.
+DIRECTION_CONSISTENCY_WINDOW: float = 60.0    # seconds to look back for consistency
+DIRECTION_CONSISTENCY_HIGH: float = 0.80      # ≥80% agreement = trending → lower dir threshold
+DIRECTION_CONSISTENCY_LOW: float = 0.50       # <50% = choppy → skip entirely
+
+# CEX macro trend — confirm direction using 1m kline closes
+DIRECTION_MACRO_FLAT_THRESHOLD: float = 0.05  # % change below this = flat (no trend signal); 0.05% ≈ $50 at BTC $100k
 
 
 # ──────────────────────────────────────────────
@@ -201,23 +210,14 @@ MARKET_MIN_VOLUME_USD: float = 100.0  # skip markets with too little volume
 # Trade only fires if final score >= MIN_COMBINED_SCORE.
 #
 SCORE_WEIGHTS: dict = {
-    "odds":      0.20,
-    "direction": 0.35,
-    "timing":    0.25,
-    "spread":    0.10,
-    "chase":     0.10,
+    "odds":      0.25,
+    "direction": 0.45,
+    "timing":    0.30,
+    "spread":    0.00,     # pass/fail gate only — no score contribution (near-constant ~85 inflated combined)
+    "chase":     0.00,     # pass/fail gate only — no score contribution (near-constant ~100 inflated combined)
 }
-MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade (reverted 53→55: undo 005's loosening after 4/4 marginal-score losers)
-MIN_DIRECTION_FILTER_SCORE: float = 30.0  # hard floor: direction score < 30 → skip regardless of combined (raised 15→30: dir<30 signals were pure noise, lost 4/4)
+MIN_COMBINED_SCORE: float = 55.0      # minimum composite score (now only direction+odds+timing)
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
-
-# Strategy-layer gate: the "should we buy" filters (direction + odds + timing),
-# renormalised to [0,100], must clear this on their own. spread/chase are
-# execution-quality ("can we fill it") and are near-constant (85/100); they
-# stay as pass/fail vetoes but must NOT be able to lift a weak-strategy trade
-# over MIN_COMBINED_SCORE. The 4/4 losers all had strategy-only scores <55.
-STRATEGY_SCORE_KEYS: tuple = ("direction", "odds", "timing")
-MIN_STRATEGY_SCORE: float = 55.0
 
 
 @dataclass
@@ -244,6 +244,7 @@ class TradeDecision:
     combined_score: float
     filter_results: dict  # name → FilterResult
     market_end_ts: float = 0.0  # market resolution time (unix s), for settlement
+    trade_size_usd: float = 0.0  # dynamic size based on confidence tier (0 = use default TRADE_SIZE_USD)
     skip_reason: Optional[str] = None
 
     def __str__(self) -> str:

@@ -111,6 +111,14 @@ async def _handle_api_klines(request: web.Request) -> web.Response:
     return web.json_response(btc_price.get_klines())
 
 
+async def _handle_api_price(request: web.Request) -> web.Response:
+    """Lightweight endpoint returning only the latest BTC spot price.
+    The frontend polls this at ~700ms to update the live candlestick between
+    the slower 2s WebSocket broadcasts."""
+    from feeds import btc_price
+    return web.json_response({"p": btc_price.get_latest()})
+
+
 async def _handle_api_optimizations(request: web.Request) -> web.Response:
     """
     List the optimization records under docs/optimizations for the dashboard's
@@ -209,6 +217,7 @@ async def start_web_server() -> None:
     app.router.add_get("/", _handle_index)
     app.router.add_get("/api/state", _handle_api_state)
     app.router.add_get("/api/klines", _handle_api_klines)
+    app.router.add_get("/api/price", _handle_api_price)
     app.router.add_get("/api/optimizations", _handle_api_optimizations)
     app.router.add_get("/ws", _handle_ws)
     app.router.add_static("/static/", _STATIC_DIR)

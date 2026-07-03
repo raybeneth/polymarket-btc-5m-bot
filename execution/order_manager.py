@@ -77,7 +77,8 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         return False
 
     simulated_fill_price = decision.entry_price + ORDER_PRICE_SLIPPAGE
-    shares = TRADE_SIZE_USD / simulated_fill_price
+    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
+    shares = actual_size / simulated_fill_price
 
     order_id = f"PAPER-{uuid.uuid4().hex[:8]}"
     pos = OpenPosition(
@@ -97,7 +98,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     tp_target = simulated_fill_price + TAKE_PROFIT_DELTA
     log.info(
         f"OPEN {side_icon} {decision.side} @ {simulated_fill_price:.3f} "
-        f"qty={shares:.2f} ${TRADE_SIZE_USD:.0f} "
+        f"qty={shares:.2f} ${actual_size:.2f} "
         f"score={decision.combined_score:.1f} "
         f"止损Target={stop_target:.3f} 止盈Target={tp_target:.3f} {order_id}"
     )
@@ -105,7 +106,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
     await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: db.insert_open(
-            pos, "paper", TRADE_SIZE_USD, decision.combined_score,
+            pos, "paper", actual_size, decision.combined_score,
             {k: v.score for k, v in decision.filter_results.items()},
         ),
     )
@@ -117,7 +118,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         "token_id": decision.token_id,
         "entry_price": simulated_fill_price,
         "shares": shares,
-        "usd_size": TRADE_SIZE_USD,
+        "usd_size": actual_size,
         "combined_score": decision.combined_score,
         "filter_scores": {k: v.score for k, v in decision.filter_results.items()},
         "timestamp": time.time(),
@@ -149,13 +150,14 @@ async def _live_execute(decision: TradeDecision) -> bool:
     client = _get_clob_client()
     limit_price = round(decision.entry_price + ORDER_PRICE_SLIPPAGE, 4)
 
-    # Calculate shares from USD budget
-    shares = round(TRADE_SIZE_USD / limit_price, 2)
+    # Calculate shares from USD budget (dynamic size from confidence tier)
+    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
+    shares = round(actual_size / limit_price, 2)
 
     log.info(
         f"[实盘] 提交买单 {decision.side} | "
         f"代币={decision.token_id[:12]}… | "
-        f"限价={limit_price:.4f} | 数量={shares:.2f}"
+        f"限价={limit_price:.4f} | 数量={shares:.2f} | ${actual_size:.2f}"
     )
 
     try:
@@ -201,7 +203,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
     tp_target = filled_price + TAKE_PROFIT_DELTA
     log.info(
         f"OPEN {side_icon} {decision.side} @ {filled_price:.3f} "
-        f"qty={shares:.2f} ${TRADE_SIZE_USD:.0f} "
+        f"qty={shares:.2f} ${actual_size:.2f} "
         f"score={decision.combined_score:.1f} "
         f"止损Target={stop_target:.3f} 止盈Target={tp_target:.3f} {order_id}"
     )
@@ -209,7 +211,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
     await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: db.insert_open(
-            pos, "live", TRADE_SIZE_USD, decision.combined_score,
+            pos, "live", actual_size, decision.combined_score,
             {k: v.score for k, v in decision.filter_results.items()},
         ),
     )
@@ -221,7 +223,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
         "token_id": decision.token_id,
         "entry_price": filled_price,
         "shares": shares,
-        "usd_size": TRADE_SIZE_USD,
+        "usd_size": actual_size,
         "combined_score": decision.combined_score,
         "filter_scores": {k: v.score for k, v in decision.filter_results.items()},
         "timestamp": time.time(),

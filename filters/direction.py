@@ -38,6 +38,8 @@ from config import (
     DIRECTION_SMOOTH_WINDOW,
     DIRECTION_VOL_SIGMA_FULL,
     DIRECTION_VOL_FLOOR_PCT,
+    DIRECTION_CONSISTENCY_WINDOW,
+    DIRECTION_MACRO_FLAT_THRESHOLD,
 )
 
 
@@ -180,6 +182,57 @@ def _compute_ob_imbalance_score(yes_book: OrderBook, no_book: OrderBook) -> tupl
 
 
 # ─────────────────────────────────────────────
+# Direction consistency & macro trend
+# ─────────────────────────────────────────────
+
+def _compute_consistency(now: float) -> tuple[float, int, int]:
+    """
+    Analyze direction agreement over DIRECTION_CONSISTENCY_WINDOW seconds.
+    Returns (agreement_ratio, same_count, total_count).
+
+    Readings with |score| < 5 are treated as noise and excluded — they'd
+    otherwise flip the sign randomly and drag consistency down even when the
+    underlying trend is clear.
+    """
+    cutoff = now - DIRECTION_CONSISTENCY_WINDOW
+    # Filter out near-zero noise (|score| < 5 is directionally meaningless)
+    recent = [(t, s) for t, s in _score_history if t >= cutoff and abs(s) >= 5.0]
+    if len(recent) < 3:
+        return 0.0, 0, len(recent)
+
+    latest_sign = 1 if recent[-1][1] >= 0 else -1
+    same = sum(1 for _, s in recent if (1 if s >= 0 else -1) == latest_sign)
+    return same / len(recent), same, len(recent)
+
+
+def _compute_macro_trend() -> tuple[str, float]:
+    """
+    Compute medium-term BTC trend from recent 1m klines (CEX data).
+    Uses the last 3 closed candles to determine direction.
+    Returns (trend_direction, magnitude_pct):
+      trend_direction: "UP" | "DOWN" | "FLAT"
+      magnitude_pct: absolute % change over the window
+    """
+    klines = btc_price.get_klines()
+    if len(klines) < 4:
+        return "FLAT", 0.0
+
+    # Last 3 closed candles (exclude current partial candle at [-1])
+    recent = klines[-4:-1]
+    start_close = recent[0]["close"]
+    end_close = recent[-1]["close"]
+
+    if start_close <= 0:
+        return "FLAT", 0.0
+
+    change_pct = (end_close - start_close) / start_close * 100.0
+
+    if abs(change_pct) < DIRECTION_MACRO_FLAT_THRESHOLD:
+        return "FLAT", abs(change_pct)
+    return ("UP" if change_pct > 0 else "DOWN"), abs(change_pct)
+
+
+# ─────────────────────────────────────────────
 # Public filter entry point
 # ─────────────────────────────────────────────
 
@@ -217,6 +270,10 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
     elif smoothed <= -DIRECTION_MIN_SCORE:
         direction = "NO"
 
+    # Compute consistency and macro trend (available in details for main.py)
+    consistency, consist_same, consist_total = _compute_consistency(now)
+    macro_trend, macro_magnitude = _compute_macro_trend()
+
     if direction == "NEUTRAL":
         return FilterResult(
             passed=False,
@@ -231,6 +288,10 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
                 "score_instant": round(combined, 1),
                 "momentum": momentum_details,
                 "orderbook": ob_details,
+                "consistency": round(consistency, 2),
+                "consistency_samples": consist_total,
+                "macro_trend": macro_trend,
+                "macro_magnitude": round(macro_magnitude, 4),
             },
         )
 
@@ -248,5 +309,9 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
             "score_instant": round(combined, 1),
             "momentum": momentum_details,
             "orderbook": ob_details,
+            "consistency": round(consistency, 2),
+            "consistency_samples": consist_total,
+            "macro_trend": macro_trend,
+            "macro_magnitude": round(macro_magnitude, 4),
         },
     )
