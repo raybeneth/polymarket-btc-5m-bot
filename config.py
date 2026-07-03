@@ -88,7 +88,7 @@ ODDS_DYN_MAX_WEAK: float = 0.60   # acceptable ceiling when direction strength =
 #   score   ≥ MIN_DIRECTION_SCORE  →  bullish  → buy YES
 #   score   ≤ -MIN_DIRECTION_SCORE →  bearish  → buy NO
 #
-DIRECTION_MIN_SCORE: float = 16.0    # minimum abs momentum score to trade (was 20 — loosened to admit more moderate-conviction signals for strategy evaluation)
+DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade (reverted 16→20: 005's loosening admitted near-noise dir=15-25 signals that lost 4/4)
 DIRECTION_LOOKBACK_SECONDS: int = 180  # how far back to measure BTC momentum
 DIRECTION_FAST_WINDOW: int = 45        # short-term window (seconds) for fast MA
 DIRECTION_SLOW_WINDOW: int = 120       # long-term window (seconds) for slow MA
@@ -207,9 +207,17 @@ SCORE_WEIGHTS: dict = {
     "spread":    0.10,
     "chase":     0.10,
 }
-MIN_COMBINED_SCORE: float = 53.0      # minimum composite score to place trade (was 55 — small loosening to raise trade volume for evaluation)
-MIN_DIRECTION_FILTER_SCORE: float = 15.0  # hard floor: direction score < 15 → skip regardless of combined
+MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade (reverted 53→55: undo 005's loosening after 4/4 marginal-score losers)
+MIN_DIRECTION_FILTER_SCORE: float = 30.0  # hard floor: direction score < 30 → skip regardless of combined (raised 15→30: dir<30 signals were pure noise, lost 4/4)
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
+
+# Strategy-layer gate: the "should we buy" filters (direction + odds + timing),
+# renormalised to [0,100], must clear this on their own. spread/chase are
+# execution-quality ("can we fill it") and are near-constant (85/100); they
+# stay as pass/fail vetoes but must NOT be able to lift a weak-strategy trade
+# over MIN_COMBINED_SCORE. The 4/4 losers all had strategy-only scores <55.
+STRATEGY_SCORE_KEYS: tuple = ("direction", "odds", "timing")
+MIN_STRATEGY_SCORE: float = 55.0
 
 
 @dataclass

@@ -27,6 +27,8 @@ from config import (
     MIN_COMBINED_SCORE,
     MIN_DIRECTION_FILTER_SCORE,
     MIN_TIMING_FILTER_SCORE,
+    STRATEGY_SCORE_KEYS,
+    MIN_STRATEGY_SCORE,
     STOP_LOSS_RATIO,
     TradeDecision,
 )
@@ -124,6 +126,20 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     )
     if combined_score < MIN_COMBINED_SCORE:
         log.debug(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
+        return
+
+    # Strategy-layer gate: direction+odds+timing (renormalised) must stand on
+    # their own, so the near-constant execution scores (spread/chase) can't lift
+    # a weak-strategy trade over the line. They remain pass/fail vetoes above.
+    strat_weight = sum(SCORE_WEIGHTS[k] for k in STRATEGY_SCORE_KEYS)
+    strategy_score = sum(
+        SCORE_WEIGHTS[k] * filter_results[k].score for k in STRATEGY_SCORE_KEYS
+    ) / strat_weight
+    if strategy_score < MIN_STRATEGY_SCORE:
+        log.debug(
+            f"[{mid}] 跳过策略层评分: {strategy_score:.1f} < {MIN_STRATEGY_SCORE} "
+            f"(dir/odds/timing 单独不达标，spread/chase 不参与凑分)"
+        )
         return
 
     # TRADE SIGNAL
