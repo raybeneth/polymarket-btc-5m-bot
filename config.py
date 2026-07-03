@@ -236,6 +236,11 @@ SCORE_WEIGHTS: dict = {
 }
 MIN_COMBINED_SCORE: float = 45.0      # minimum composite score (now only direction+odds+timing); lowered 55→45 since tiered sizing (LOW/MED/HIGH) now absorbs weaker signals instead of a hard skip
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
+# Disabled for now — timing already feeds combined_score at 30% weight, and this
+# hard floor has no skip-reason telemetry yet to show whether it's earning its
+# keep vs. just cutting frequency (see docs/optimizations, direction weak_skip
+# discussion). Flip back on via env var once the funnel data says it's worth it.
+MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "false").lower() == "true"
 
 
 @dataclass

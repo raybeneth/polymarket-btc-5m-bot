@@ -39,6 +39,7 @@ services:
       PAPER_TRADING: true
       TRADE_SIZE_USD: 1000.0
       PROXY_ENABLED: false
+      MIN_TIMING_FILTER_SCORE_ENABLED: false
       LOG_LEVEL: INFO
       BTC_PRICE_SOURCE: okx
     volumes:

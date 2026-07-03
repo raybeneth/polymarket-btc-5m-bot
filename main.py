@@ -26,6 +26,7 @@ from config import (
     SCORE_WEIGHTS,
     MIN_COMBINED_SCORE,
     MIN_TIMING_FILTER_SCORE,
+    MIN_TIMING_FILTER_SCORE_ENABLED,
     TRADE_SIZE_USD,
     TRADE_SIZE_LOW_TIER_RATIO,
     DIRECTION_CONSISTENCY_HIGH,
@@ -136,7 +137,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     if not timing_result.passed:
         log.debug(f"[{mid}] 跳过时机: 已过{elapsed:.0f}s 剩余{remaining:.0f}s")
         return
-    if timing_result.score < MIN_TIMING_FILTER_SCORE:
+    if MIN_TIMING_FILTER_SCORE_ENABLED and timing_result.score < MIN_TIMING_FILTER_SCORE:
         log.debug(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
