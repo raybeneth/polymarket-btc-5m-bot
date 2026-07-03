@@ -10,4 +10,5 @@ venv/
 positions.log
 data/
 .claude/
-docs/
+# NOTE: docs/optimizations/*.md are served by the dashboard's /api/optimizations
+# menu, so docs/ must be copied into the image — do NOT ignore it.
