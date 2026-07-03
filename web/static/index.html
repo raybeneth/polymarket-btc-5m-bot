@@ -401,8 +401,8 @@
   .positions-table td:first-child { white-space: nowrap; min-width: 72px; }
   .empty-row { text-align: center; color: var(--text-dim); padding: 24px !important; }
 
-  /* Fixed height showing ~3 rows; the rest scrolls. Header stays sticky. */
-  .history-container { height: 140px; overflow-y: auto; }
+  /* Fixed height showing ~6 rows; the rest scrolls. Header stays sticky. */
+  .history-container { height: 280px; overflow-y: auto; }
   .history-container thead th { position: sticky; top: 0; z-index: 1; }
 
   /* ── Log area ────────────────────────────── */
@@ -425,7 +425,7 @@
 
   .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
 
-  /* ── Main row: BTC chart (left) + Live Log (right) ─────── */
+  /* ── Main row: BTC chart (left) + Open Positions (right) ─────── */
   .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -438,10 +438,6 @@
     min-width: 0;
   }
   .main-row > *:last-child { border-right: none; }
-  /* Live Log gets a fixed height matched to the chart's plot area (chart-wrap).
-     Grid stretch makes the two cards' outer boxes equal; any blank below the
-     log is the same --bg colour, so there's no visible seam. */
-  .main-row > .section .log-container { height: 460px; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -472,12 +468,10 @@
     .btc-chart-card { height: 400px; }
     .btc-chart-card .chart-wrap { height: 330px; }
 
-    /* Stack the main row (chart above Live Log), divided by a line */
+    /* Stack the main row (chart above Open Positions), divided by a line */
     .main-row { grid-template-columns: 1fr; }
     .main-row > .btc-chart-card,
     .main-row > .section { border-right: none; border-bottom: 1px solid var(--border); }
-    /* Stacked Live Log keeps its own shorter fixed height on phones */
-    .main-row > .section .log-container { height: 240px; }
 
     /* Wide tables scroll sideways instead of squishing/wrapping */
     .table-scroll,
@@ -486,11 +480,6 @@
     .positions-table th,
     .positions-table td { padding: 8px 12px; white-space: nowrap; }
     .empty-row { padding: 16px !important; }
-
-    /* Show ~6 rows before scrolling instead of the desktop default of ~3
-       (mobile has more vertical room to spare, and stacked layout makes a
-       taller history panel less costly than on the 50/50 desktop row). */
-    .history-container { height: 280px; }
 
     .section-header { padding: 10px 14px; }
 
@@ -634,7 +623,7 @@
 
 </div>
 
-<!-- Desktop: BTC chart (left) + Live Log (right); mobile: stacked -->
+<!-- Desktop: BTC chart (left) + Open Positions (right); mobile: stacked -->
 <div class="main-row">
 
   <div class="chart-card btc-chart-card">
@@ -648,22 +637,23 @@
     </div>
   </div>
 
-  <!-- Open Positions — full width -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Open Positions</span>
-    <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">Open Positions</span>
+      <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
+    </div>
+    <div class="table-scroll">
+      <table class="positions-table">
+        <thead>
+          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
+        </thead>
+        <tbody id="posBody">
+          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
-  <div class="table-scroll">
-    <table class="positions-table">
-      <thead>
-        <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
-      </thead>
-      <tbody id="posBody">
-        <tr><td colspan="7" class="empty-row">No open positions</td></tr>
-      </tbody>
-    </table>
-  </div>
+
 </div>
 
 <!-- Position History — full width -->
@@ -684,14 +674,13 @@
   </div>
 </div>
 
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">Live Log</span>
-      <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
-    </div>
-    <div class="log-container" id="logContainer"></div>
+<!-- Live Log — full width -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-title">Live Log</span>
+    <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
   </div>
-
+  <div class="log-container" id="logContainer"></div>
 </div>
 
 
