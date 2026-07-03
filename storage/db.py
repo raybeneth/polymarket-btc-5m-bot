@@ -64,19 +64,23 @@ def _to_ts(dt: Optional[datetime]) -> float:
 
 
 def init_schema() -> None:
-    """Create the positions table if missing. Call once at startup."""
+    """Create the positions + logs tables if missing. Call once at startup."""
     with open(_SCHEMA_PATH, "r", encoding="utf-8") as f:
         ddl = f.read()
-    statement = "\n".join(
+    cleaned = "\n".join(
         line for line in ddl.splitlines() if not line.strip().startswith("--")
     )
+    # schema.sql holds multiple CREATE TABLE statements; PyMySQL's execute runs
+    # one at a time, so split on ';' and run each non-empty statement.
+    statements = [s.strip() for s in cleaned.split(";") if s.strip()]
     conn = _get_pool().connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(statement)
+            for stmt in statements:
+                cur.execute(stmt)
     finally:
         conn.close()
-    log.info("MySQL positions 表已就绪")
+    log.info("MySQL positions/logs 表已就绪")
 
 
 def insert_open(pos: OpenPosition, mode: str, usd_size: float,
@@ -226,6 +230,48 @@ def get_recent_closed(limit: Optional[int] = 50) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def insert_log(ts: float, line: str) -> None:
+    """Persist one dashboard log line (called from the web log-writer thread)."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO logs (ts, line) VALUES (%s, %s)",
+                (_to_dt(ts), line),
+            )
+    finally:
+        conn.close()
+
+
+def get_recent_logs(limit: int = 200) -> list[str]:
+    """Newest `limit` log lines, returned oldest-first for chronological display."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT line FROM logs ORDER BY id DESC LIMIT %s", (limit,)
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [row["line"] for row in reversed(rows)]
+
+
+def prune_logs(keep: int = 5000) -> None:
+    """Delete all but the newest `keep` log rows to bound table growth."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(id) AS max_id FROM logs")
+            row = cur.fetchone()
+            max_id = row["max_id"] if row else None
+            if max_id is None:
+                return
+            cur.execute("DELETE FROM logs WHERE id <= %s", (max_id - keep,))
+    finally:
+        conn.close()
 
 
 def load_open_positions() -> list[OpenPosition]:

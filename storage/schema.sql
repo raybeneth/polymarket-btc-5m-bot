@@ -43,3 +43,13 @@ CREATE TABLE IF NOT EXISTS positions (
     KEY idx_closed_at (closed_at),
     KEY idx_market_id (market_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Dashboard "Live Log" persistence. Each row is one already-formatted log line
+-- as shown in the UI, plus a timestamp for ordering/retention. Reloaded into the
+-- in-memory buffer on startup so the log survives restarts.
+CREATE TABLE IF NOT EXISTS logs (
+    id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    ts         DATETIME(3) NOT NULL,
+    line       TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

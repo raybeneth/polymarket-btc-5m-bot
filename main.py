@@ -223,8 +223,19 @@ async def main_loop() -> None:
 
     loop = asyncio.get_event_loop()
 
-    # Ensure the positions table exists, then load historical stats via SQL
+    # Ensure the positions + logs tables exist, then load historical stats via SQL
     await loop.run_in_executor(None, db.init_schema)
+
+    # Restore the dashboard's Live Log from previous runs so it isn't empty on
+    # restart (core logs are sparse; persisting them keeps continuity).
+    try:
+        prior_logs = await loop.run_in_executor(None, db.get_recent_logs)
+        if prior_logs:
+            web_server.preload_logs(prior_logs)
+            log.info(f"已从 MySQL 恢复 {len(prior_logs)} 条历史日志")
+    except Exception as exc:
+        log.debug(f"历史日志加载失败: {exc}")
+
     _history = await loop.run_in_executor(None, db.get_stats)
     log.info(
         f"历史记录已加载: 共{_history['total_trades']}笔, "

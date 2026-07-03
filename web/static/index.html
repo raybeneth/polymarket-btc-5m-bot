@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Polymarket BTC 5min Bot</title>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <style>
   :root {
     --bg:       #0f1a20;
@@ -101,6 +102,90 @@
   .info-btn:hover   { background: rgba(39, 166, 154, 0.28); }
   .info-btn:active  { background: rgba(39, 166, 154, 0.42); }
 
+  /* Hamburger icon variant — three stacked bars instead of text. */
+  .menu-btn {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    padding: 8px 10px;
+  }
+  .menu-btn span {
+    display: block;
+    width: 16px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  /* ── Slide-out menu drawer (right) ───────── */
+  .drawer-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 110;
+  }
+  .drawer-overlay.open { display: block; }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 280px;
+    max-width: 82vw;
+    background: var(--card);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .drawer-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .drawer-close {
+    background: none; border: none;
+    color: var(--text-dim);
+    font-size: 22px; line-height: 1;
+    padding: 2px 6px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .drawer-close:hover { color: var(--text); }
+  .drawer-menu { display: flex; flex-direction: column; overflow-y: auto; padding: 6px 0; }
+  .drawer-item {
+    text-align: left;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 14px 18px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .drawer-item:hover { background: rgba(39, 166, 154, 0.08); }
+  .drawer-item .di-title { color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
+  .drawer-item .di-sub { color: var(--text-dim); font-size: 10.5px; line-height: 1.5; }
+
   /* ── Strategy-info modal ─────────────────── */
   .modal-overlay {
     display: none;
@@ -152,6 +237,34 @@
     line-height: 1.9;
     color: var(--text);
     white-space: pre-line;
+  }
+
+  /* Optimization-record modal: wider card + rendered-markdown body. */
+  .doc-card { max-width: 780px; }
+  .doc-body {
+    white-space: normal;   /* override .modal-body — this is real HTML from marked */
+    font-size: 12.5px;
+    line-height: 1.7;
+  }
+  .doc-body h1 { font-size: 16px; color: var(--accent); margin: 4px 0 12px; }
+  .doc-body h2 { font-size: 14px; color: var(--text); margin: 18px 0 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .doc-body h3 { font-size: 12.5px; color: var(--accent); margin: 14px 0 6px; }
+  .doc-body p  { margin: 8px 0; }
+  .doc-body ul, .doc-body ol { margin: 8px 0 8px 20px; }
+  .doc-body li { margin: 3px 0; }
+  .doc-body strong { color: var(--text); font-weight: 700; }
+  .doc-body code {
+    background: var(--bg); color: var(--yellow);
+    padding: 1px 5px; border-radius: 3px; font-size: 11.5px;
+  }
+  .doc-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+  .doc-body a { color: var(--accent); }
+  .doc-body table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 11.5px; }
+  .doc-body th, .doc-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+  .doc-body th { background: var(--bg); color: var(--text-dim); font-weight: 600; }
+  .doc-body blockquote {
+    border-left: 3px solid var(--border); margin: 8px 0;
+    padding: 2px 12px; color: var(--text-dim);
   }
 
   /* ── Stats grid (full width; P&L chart removed) ─────────────────── */
@@ -382,7 +495,9 @@
       <span class="conn-dot off" id="wsDot"></span>
       <span id="wsLabel">disconnected</span>
     </div>
-    <button class="info-btn" id="infoBtn" type="button">CLICK-ME</button>
+    <button class="info-btn menu-btn" id="menuBtn" type="button" aria-label="菜单">
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </div>
 
@@ -400,6 +515,30 @@
 核心不是多交易，而是过滤掉大部分不该做的 5m ，只做胜率和赔率都还能接受的那一小部分。
 
 收益来自纪律，不来自冲动。</div>
+  </div>
+</div>
+
+<!-- Slide-out menu drawer (right) -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-header">
+    <span class="drawer-title">菜单</span>
+    <button class="drawer-close" id="drawerClose" type="button" aria-label="Close">&times;</button>
+  </div>
+  <nav class="drawer-menu" id="drawerMenu">
+    <button class="drawer-item" type="button" data-action="strategy">CLICK-ME</button>
+    <!-- optimization records injected here by JS -->
+  </nav>
+</aside>
+
+<!-- Optimization-record content modal (rendered markdown) -->
+<div class="modal-overlay" id="docModal">
+  <div class="modal-card doc-card">
+    <div class="modal-header">
+      <span class="modal-title" id="docTitle">优化记录</span>
+      <button class="modal-close" id="docClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body doc-body" id="docBody"></div>
   </div>
 </div>
 
@@ -815,11 +954,65 @@ function fmtAgo(sec) {
 const infoModal = $('infoModal');
 function openInfoModal()  { infoModal.classList.add('open'); }
 function closeInfoModal() { infoModal.classList.remove('open'); }
-
-$('infoBtn').addEventListener('click', openInfoModal);
 $('infoModalClose').addEventListener('click', closeInfoModal);
 infoModal.addEventListener('click', e => { if (e.target === infoModal) closeInfoModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeInfoModal(); });
+
+// ── Optimization-record doc modal ─────────────────
+const docModal = $('docModal');
+function openDoc(title, markdown) {
+  $('docTitle').textContent = title;
+  $('docBody').innerHTML = (window.marked ? marked.parse(markdown || '') : escHtml(markdown || ''));
+  $('docBody').scrollTop = 0;
+  docModal.classList.add('open');
+}
+function closeDoc() { docModal.classList.remove('open'); }
+$('docClose').addEventListener('click', closeDoc);
+docModal.addEventListener('click', e => { if (e.target === docModal) closeDoc(); });
+
+// ── Slide-out menu drawer ─────────────────────────
+const drawer = $('drawer'), drawerOverlay = $('drawerOverlay');
+function openDrawer()  { drawer.classList.add('open'); drawerOverlay.classList.add('open'); }
+function closeDrawer() { drawer.classList.remove('open'); drawerOverlay.classList.remove('open'); }
+
+$('menuBtn').addEventListener('click', openDrawer);
+$('drawerClose').addEventListener('click', closeDrawer);
+drawerOverlay.addEventListener('click', closeDrawer);
+
+// The static CLICK-ME item opens the strategy modal.
+$('drawerMenu').addEventListener('click', e => {
+  const item = e.target.closest('.drawer-item');
+  if (!item) return;
+  if (item.dataset.action === 'strategy') { closeDrawer(); openInfoModal(); }
+});
+
+// Populate the drawer with one item per optimization record (data-driven).
+async function loadOptimizations() {
+  let recs = [];
+  try {
+    const res = await fetch('/api/optimizations');
+    if (res.ok) recs = await res.json();
+  } catch (e) { /* leave menu with just CLICK-ME */ }
+  const menu = $('drawerMenu');
+  recs.forEach(r => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'drawer-item';
+    // Strip the leading "NNN — " from the heading for the subtitle.
+    const sub = r.title.replace(/^\s*\d+\s*[—-]\s*/, '');
+    btn.innerHTML = `<span class="di-title">优化记录${r.num}</span><span class="di-sub">${escHtml(sub)}</span>`;
+    btn.addEventListener('click', () => { closeDrawer(); openDoc(`优化记录${r.num}`, r.markdown); });
+    menu.appendChild(btn);
+  });
+}
+loadOptimizations();
+
+// Unified Escape: close whichever overlay is open (doc → strategy → drawer).
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (docModal.classList.contains('open')) closeDoc();
+  else if (infoModal.classList.contains('open')) closeInfoModal();
+  else if (drawer.classList.contains('open')) closeDrawer();
+});
 
 connect();
 </script>
