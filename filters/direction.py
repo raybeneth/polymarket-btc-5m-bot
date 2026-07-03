@@ -55,7 +55,7 @@ _score_history: deque = deque(maxlen=100)
 # periodically and resets this via get_and_reset_skip_stats().
 # ─────────────────────────────────────────────
 _skip_stats: dict = {
-    "neutral": 0, "noise_skip": 0, "low": 0, "med": 0, "high": 0, "reversal_guard": 0,
+    "neutral": 0, "noise_skip": 0, "weak_skip": 0, "low": 0, "med": 0, "high": 0, "reversal_guard": 0,
 }
 
 

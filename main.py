@@ -95,14 +95,28 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     raw_dir = abs(dir_result.details.get("score_raw", 0))
     strong_signal = dir_result.score >= 25.0  # raw ≥ ~40
 
-    # Gate: only true noise is a hard skip now. Everything else proceeds and
-    # gets sized by confidence tier below (LOW/MED/HIGH) instead of being
-    # rejected outright — the old consistency<50% hard floor and the dir_score
+    # Gate: two hard skips remain — true noise (consistency) and near-zero
+    # magnitude (direction filter_score). Everything else proceeds and gets
+    # sized by confidence tier below (LOW/MED/HIGH) instead of being rejected
+    # outright — the old consistency<50% hard floor and the dir_score
     # sub-thresholds were redundant re-checks of the same signal, producing a
     # cliff effect without adding information (see docs/optimizations/008).
     if consistency < DIRECTION_CONSISTENCY_FLOOR:
         direction.record_skip("noise_skip")
         log.info(f"[{mid}] 跳过噪声: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_FLOOR:.0%} (dir={raw_dir:.0f})")
+        return
+
+    # Near-zero direction magnitude must not fire regardless of how high
+    # odds/timing are — odds(25%)+timing(30%) alone can reach 55 combined
+    # score, above MIN_COMBINED_SCORE(45), so a hard floor here is the only
+    # thing that actually stops a zero-edge trade (see docs/optimizations/010,
+    # PAPER-93332164: dir=0.5, combined=50.48, still lost -$154 at LOW tier).
+    if dir_result.score < DIRECTION_MED_MIN_SCORE:
+        direction.record_skip("weak_skip")
+        log.info(
+            f"[{mid}] 跳过方向弱信号: filter_score={dir_result.score:.1f} < {DIRECTION_MED_MIN_SCORE} "
+            f"(raw={raw_dir:.0f}, consistency={consistency:.0%})"
+        )
         return
 
     book = yes_book if side == "YES" else no_book
@@ -169,8 +183,9 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
             and consistency >= DIRECTION_CONSISTENCY_HIGH):
         trade_size = TRADE_SIZE_USD                        # 100%
         tier = "HIGH"
-    elif (consistency >= DIRECTION_CONSISTENCY_LOW or strong_signal) \
-            and dir_result.score >= DIRECTION_MED_MIN_SCORE:
+    elif consistency >= DIRECTION_CONSISTENCY_LOW or strong_signal:
+        # dir_result.score >= DIRECTION_MED_MIN_SCORE is guaranteed here — the
+        # weak_skip hard floor above already rejected anything below it.
         trade_size = TRADE_SIZE_USD * 0.5                  # 50%
         tier = "MED"
     else:
@@ -422,7 +437,7 @@ async def main_loop() -> None:
                 log.info(
                     f"方向漏斗(近{STATS_REPORT_INTERVAL/60:.0f}分钟): "
                     f"NEUTRAL={stats['neutral']} 噪声跳过={stats['noise_skip']} "
-                    f"反转拦截={stats['reversal_guard']} | "
+                    f"弱信号跳过={stats['weak_skip']} 反转拦截={stats['reversal_guard']} | "
                     f"成交 LOW={stats['low']} MED={stats['med']} HIGH={stats['high']} (共{fired}笔)"
                 )
                 _last_stats_report = now_ts
