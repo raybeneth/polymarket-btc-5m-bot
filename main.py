@@ -308,6 +308,7 @@ def _build_web_state() -> dict:
                 "reason": h["exit_reason"],
                 "hold": int(h["closed_at"] - h["opened_at"]) if h["closed_at"] and h["opened_at"] else 0,
                 "closed_ago": int(now - h["closed_at"]) if h["closed_at"] else 0,
+                "opened_at": h["opened_at"],
                 "order_id": h["order_id"],
             }
             for h in _recent_closed

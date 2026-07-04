@@ -358,6 +358,57 @@
   }
   .btc-countdown:empty { display: none; }
 
+  /* Trade-marker legend, appended after the countdown on the same line. */
+  .btc-marker-legend {
+    margin-left: 14px;
+    color: var(--text-dim);
+    font-weight: 400;
+    letter-spacing: normal;
+  }
+  .btc-marker-legend b { color: inherit; }
+
+  /* Curved connector lines from each trade box back to its entry candle —
+     pure SVG, sits below the label layer, ignores pointer events entirely. */
+  .trade-connector-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  /* Always-visible, draggable trade detail boxes, absolutely positioned in JS
+     over the chart (see renderTradeLabels()). The layer itself ignores
+     pointer events so it never blocks chart scroll/zoom/crosshair — only the
+     boxes themselves (which opt back in) are interactive. */
+  .trade-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .trade-label {
+    position: absolute;
+    width: 110px;
+    background: #1c2f3b;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    pointer-events: auto;
+    cursor: move;
+    user-select: none;
+  }
+  .trade-label.dragging {
+    z-index: 10;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    opacity: 0.9;
+  }
+
   /* ── Section ─────────────────────────────── */
   .section { border-bottom: 1px solid var(--border); }
   .section-header {
@@ -631,9 +682,14 @@
       <span class="chart-title">BTC/USDT · 5minute · CEX</span>
       <span class="chart-sub" id="btcChartSub">—</span>
     </div>
-    <div class="btc-target-label"><span id="btcTargetLabel">Reference Target —</span><span class="btc-countdown" id="btcCountdown"></span></div>
+    <div class="btc-target-label">
+      <span id="btcTargetLabel">Reference Target —</span><span class="btc-countdown" id="btcCountdown"></span
+      ><span class="btc-marker-legend">▲下方=买YES ▼上方=买NO · <b class="positive">绿</b>=赢 <b class="negative">红</b>=亏 · 数字=盈亏(USD)</span>
+    </div>
     <div class="chart-wrap">
       <div id="btcChart" style="width:100%;height:100%"></div>
+      <svg class="trade-connector-layer" id="btcConnectorLayer"></svg>
+      <div class="trade-label-layer" id="btcLabelLayer"></div>
     </div>
   </div>
 
@@ -698,6 +754,8 @@ let _btcTargets = [];      // current target prices — folded into the price-sc
                            // so a target line can never scroll out of the visible range
 let _btcCandles = new Map(); // 5min-bucket-open-ts (s) -> {time,open,high,low,close}
 let _btcKlineTimer = null;   // self-rescheduling kline-refresh timer
+let _btcChartContainer = null; // #btcChart element, for coordinate conversion + label positioning
+let _tradeHistory = [];        // last render()'s closed-trade history, re-laid-out on pan/zoom
 
 // Candle times are plain Unix epoch seconds (UTC) — shift by +8h and read back
 // with the UTC getters so the label is fixed at UTC+8 regardless of the
@@ -726,6 +784,7 @@ function _updateBtcCountdownText() {
 
 function initBtcChart() {
   const container = $('btcChart');
+  _btcChartContainer = container;
   _btcChart = LightweightCharts.createChart(container, {
     autoSize: true,
     layout: {
@@ -790,6 +849,12 @@ function initBtcChart() {
   // Tick the inline countdown text every second, independent of price activity.
   _updateBtcCountdownText();
   setInterval(_updateBtcCountdownText, 1000);
+
+  // Trade detail boxes are plain HTML overlays (Lightweight Charts markers can
+  // only show a short text label, not a multi-line box), positioned via pixel
+  // coordinates — so they need re-laying-out whenever the visible range pans
+  // or zooms, not just when new data arrives.
+  _btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => renderTradeLabels(_tradeHistory));
 }
 
 // On first load only, position the most recent candle a bit right of dead
@@ -916,6 +981,186 @@ function updateBtcChart(price, target, positions) {
     : '—';
 }
 
+// Historical closed-trade markers on the BTC chart: shape encodes direction
+// (▲ belowBar = bought YES, ▼ aboveBar = bought NO — so the arrow points away
+// from the bar toward the side taken), color encodes outcome (green=WIN,
+// red=LOSS). Kept as two separate channels rather than one color doing both
+// jobs, since this dashboard already uses green/red for direction elsewhere
+// (.side-yes/.side-no) — a YES trade that loses would otherwise need to be
+// both colors at once. The detail box (entry/exit/pnl) is a separate HTML
+// overlay — see renderTradeLabels() — since Lightweight Charts markers only
+// support a short text label, not a multi-line box.
+function updateTradeMarkers(history) {
+  if (!_btcSeries) return;
+  const markers = [];
+  for (const h of history) {
+    if (!h.opened_at || !h.result) continue;
+    const isWin = h.result === 'WIN';
+    markers.push({
+      time: Math.floor(h.opened_at / 300) * 300,
+      position: h.side === 'YES' ? 'belowBar' : 'aboveBar',
+      color: isWin ? '#27a69a' : '#ef5350',
+      shape: h.side === 'YES' ? 'arrowUp' : 'arrowDown',
+    });
+  }
+  markers.sort((a, b) => a.time - b.time);
+  _btcSeries.setMarkers(markers);
+
+  _tradeHistory = history;
+  renderTradeLabels(history);
+}
+
+// Always-visible detail boxes for closed trades — plain HTML divs positioned
+// over the chart via pixel coordinates (not native chart primitives), each
+// connected back to its entry candle by a curved SVG line. Re-laid-out on
+// every render() tick AND whenever the visible range pans/zooms (see the
+// subscribeVisibleLogicalRangeChange call in initBtcChart()). Boxes whose
+// anchor x-position would land within MIN_LABEL_SPACING_PX of the previous
+// (still-visible) one are skipped entirely — dense historical clusters don't
+// need every single box shown, just don't overlap the ones that are.
+//
+// Dragging: each box can be dragged to declutter it from whatever it's
+// covering. The offset is stored per order_id (_labelOffsets) as a delta from
+// the *default* anchored position, so it survives re-renders/pan/zoom — the
+// box stays the same distance from its (possibly moving) anchor rather than
+// snapping back. While a drag is in progress, renders are skipped entirely
+// (_draggingOrderId guard) so a live WS push can't rebuild the DOM out from
+// under the user's mouse.
+const MIN_LABEL_SPACING_PX = 70;
+const LABEL_BOX_W = 110;
+const LABEL_BOX_H = 62;
+const LABEL_GAP = 14; // default distance between anchor point and box edge
+
+let _labelOffsets = new Map();  // order_id -> {dx, dy}
+let _draggingOrderId = null;
+
+function renderTradeLabels(history) {
+  if (_draggingOrderId) return; // don't rebuild out from under an active drag
+  if (!_btcChart || !_btcSeries || !_btcChartContainer) return;
+  const layer = $('btcLabelLayer');
+  const svg = $('btcConnectorLayer');
+  if (!layer || !svg) return;
+  layer.innerHTML = '';
+  svg.innerHTML = '';
+
+  const timeScale = _btcChart.timeScale();
+  const containerWidth = _btcChartContainer.clientWidth;
+  const containerHeight = _btcChartContainer.clientHeight;
+  svg.setAttribute('viewBox', `0 0 ${containerWidth} ${containerHeight}`);
+
+  // Drop offsets for trades that have scrolled out of the retained history.
+  const liveIds = new Set((history || []).map(h => h.order_id));
+  for (const id of _labelOffsets.keys()) if (!liveIds.has(id)) _labelOffsets.delete(id);
+
+  let lastX = -Infinity;
+  for (const h of (history || [])) {
+    if (!h.opened_at || !h.result) continue;
+    const t = Math.floor(h.opened_at / 300) * 300;
+    const ax = timeScale.timeToCoordinate(t);
+    if (ax == null || ax < 0 || ax > containerWidth) continue;      // off-screen
+    if (ax - lastX < MIN_LABEL_SPACING_PX) continue;                 // too close to the last shown box
+    lastX = ax;
+
+    const isYes = h.side === 'YES';
+    const candle = _btcCandles.get(t);
+    const anchorPrice = candle ? (isYes ? candle.low : candle.high) : null;
+    const priceY = anchorPrice != null ? _btcSeries.priceToCoordinate(anchorPrice) : null;
+    const ay = priceY != null ? priceY : (isYes ? containerHeight - 20 : 20);
+
+    // Default position: just past the anchor, on the same side as the arrow
+    // (below for YES, above for NO) — a short, mostly-vertical connector.
+    const off = _labelOffsets.get(h.order_id) || { dx: 0, dy: 0 };
+    const defaultLeft = Math.max(0, Math.min(ax - LABEL_BOX_W / 2, containerWidth - LABEL_BOX_W));
+    const defaultTop = isYes
+      ? Math.min(containerHeight - LABEL_BOX_H - 2, ay + LABEL_GAP)
+      : Math.max(2, ay - LABEL_GAP - LABEL_BOX_H);
+    const left = defaultLeft + off.dx;
+    const top = defaultTop + off.dy;
+
+    const isWin = h.result === 'WIN';
+    const resCls = isWin ? 'positive' : 'negative';
+    const dotColor = isWin ? '#27a69a' : '#ef5350';
+    const exitStr = h.exit != null ? h.exit.toFixed(3) : '—';
+    const box = document.createElement('div');
+    box.className = 'trade-label';
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+    box.innerHTML = `
+      <div>${isYes ? '▲ 买YES' : '▼ 买NO'} · <span class="${resCls}">${h.result}</span></div>
+      <div>入场 ${h.entry.toFixed(3)} → 出场 ${exitStr}</div>
+      <div class="${resCls}">${h.pnl >= 0 ? '+' : ''}${h.pnl.toFixed(2)} USD</div>
+    `;
+    layer.appendChild(box);
+
+    const path = _drawConnector(svg, ax, ay, left, top, dotColor);
+    _makeLabelDraggable(box, h.order_id, ax, ay, dotColor, path);
+  }
+}
+
+// Curved connector from the chart anchor (ax,ay) to whichever of the box's
+// top/bottom center edges is closer — cubic bezier with horizontal control
+// points for a smooth S-curve rather than a straight line.
+function _drawConnector(svg, ax, ay, boxLeft, boxTop, color) {
+  const cx = boxLeft + LABEL_BOX_W / 2;
+  const topY = boxTop, bottomY = boxTop + LABEL_BOX_H;
+  const endY = Math.abs(topY - ay) <= Math.abs(bottomY - ay) ? topY : bottomY;
+  const midX = ax + (cx - ax) * 0.5;
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${endY}, ${cx} ${endY}`);
+  path.setAttribute('stroke', color);
+  path.setAttribute('stroke-width', '1.2');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('opacity', '0.55');
+  svg.appendChild(path);
+
+  const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  dot.setAttribute('cx', ax); dot.setAttribute('cy', ay); dot.setAttribute('r', 2.5);
+  dot.setAttribute('fill', color);
+  svg.appendChild(dot);
+  return path;
+}
+
+function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
+  box.addEventListener('mousedown', e => {
+    e.preventDefault();
+    _draggingOrderId = orderId;
+    box.classList.add('dragging');
+    const startX = e.clientX, startY = e.clientY;
+    const startLeft = box.offsetLeft, startTop = box.offsetTop;
+    const containerWidth = _btcChartContainer.clientWidth;
+    const containerHeight = _btcChartContainer.clientHeight;
+    // The box's position when the drag starts already includes any prior
+    // offset — subtract it out to recover the *default* (un-offset) anchor
+    // position, so the new offset computed on drop is relative to that, not
+    // to wherever the box happened to be sitting.
+    const prevOffset = _labelOffsets.get(orderId) || { dx: 0, dy: 0 };
+    const defaultLeft = startLeft - prevOffset.dx;
+    const defaultTop = startTop - prevOffset.dy;
+
+    function onMove(ev) {
+      const left = Math.max(0, Math.min(startLeft + (ev.clientX - startX), containerWidth - LABEL_BOX_W));
+      const top = Math.max(0, Math.min(startTop + (ev.clientY - startY), containerHeight - LABEL_BOX_H));
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+      const cx = left + LABEL_BOX_W / 2;
+      const topY = top, bottomY = top + LABEL_BOX_H;
+      const endY = Math.abs(topY - ay) <= Math.abs(bottomY - ay) ? topY : bottomY;
+      const midX = ax + (cx - ax) * 0.5;
+      path.setAttribute('d', `M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${endY}, ${cx} ${endY}`);
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      box.classList.remove('dragging');
+      _labelOffsets.set(orderId, { dx: box.offsetLeft - defaultLeft, dy: box.offsetTop - defaultTop });
+      _draggingOrderId = null;
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // ── WebSocket ──────────────────────────────────
 let ws = null;
 
@@ -987,6 +1232,7 @@ function render(d) {
 
   // BTC live 5m candlestick chart (current candle driven by the latest spot tick)
   updateBtcChart(d.btc_price, d.btc_target, positions);
+  updateTradeMarkers(history);
 
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0

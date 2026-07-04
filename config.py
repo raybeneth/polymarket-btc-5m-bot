@@ -88,7 +88,7 @@ ODDS_DYN_MAX_WEAK: float = 0.60   # acceptable ceiling when direction strength =
 #   score   ≥ MIN_DIRECTION_SCORE  →  bullish  → buy YES
 #   score   ≤ -MIN_DIRECTION_SCORE →  bearish  → buy NO
 #
-DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum score to trade (reverted 16→20: 005's loosening admitted near-noise dir=15-25 signals that lost 4/4)
+DIRECTION_MIN_SCORE: float = 20.0    # minimum abs momentum   score to trade (reverted 16→20: 005's loosening admitted near-noise dir=15-25 signals that lost 4/4)
 DIRECTION_LOOKBACK_SECONDS: int = 180  # how far back to measure BTC momentum
 DIRECTION_FAST_WINDOW: int = 45        # short-term window (seconds) for fast MA
 DIRECTION_SLOW_WINDOW: int = 120       # long-term window (seconds) for slow MA
@@ -107,30 +107,6 @@ DIRECTION_SMOOTH_WINDOW: float = 20.0  # seconds to average direction scores ove
 DIRECTION_OB_WEIGHT: float = 0.35     # 35% from orderbook imbalance
 DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
 
-# Direction consistency — measures how persistently readings agree on direction.
-# High consistency = genuine trend; low consistency = choppy/noisy.
-DIRECTION_CONSISTENCY_WINDOW: float = 60.0    # seconds to look back for consistency
-DIRECTION_CONSISTENCY_HIGH: float = 0.80      # ≥80% agreement = trending → lower dir threshold
-DIRECTION_CONSISTENCY_LOW: float = 0.50       # ≥50% = MED tier boundary (no longer a hard skip)
-DIRECTION_CONSISTENCY_FLOOR: float = 0.30     # <30% = pure noise → hard skip (only real cutoff left)
-
-# MED-tier magnitude floor (see docs/optimizations/009). Consistency alone
-# measures whether the SIGN has persisted, not whether the signal has any
-# real strength — a filter_score sitting near 0 can still read consistency
-# ≥50% by chance and would otherwise get the same 50% sizing as a genuinely
-# moderate signal. PAPER-25393563 (dir_score=1.9, consistency=64% → MED $5,
-# lost -4.27) is exactly this case. Requiring a small non-zero floor keeps
-# "persistent near-noise" out of MED — it falls through to LOW (25%) instead.
-DIRECTION_MED_MIN_SCORE: float = 10.0         # filter_score floor for the MED tier
-
-# Reversal guard — last-look freshness check performed immediately before
-# order execution (not a duplicate of the 60s consistency window above).
-# Looks at BTC price movement over this short horizon; if it has already
-# reversed hard against our intended side, we abandon this attempt instead
-# of firing into a stale signal. Matters more now that STOP_LOSS is disabled
-# (a wrong entry rides to full settlement instead of a partial stop-loss exit).
-DIRECTION_REVERSAL_GUARD_WINDOW: float = 12.0  # seconds
-
 
 # ──────────────────────────────────────────────
 # FILTER 3 — ENTRY TIMING (remaining time in market)
@@ -142,7 +118,7 @@ DIRECTION_REVERSAL_GUARD_WINDOW: float = 12.0  # seconds
 #
 MARKET_DURATION_SECONDS: int = 300    # total market length
 
-TIMING_MIN_ELAPSED: int = 70          # must have at least 70s of market history (was 40 — raised so direction signal has more time to mature before entry)
+TIMING_MIN_ELAPSED: int = 40          # must have at least 40s of market history
 TIMING_MAX_ELAPSED: int = 210         # never enter after 3m30s elapsed
 TIMING_MIN_REMAINING: int = 90        # must have ≥90s left when we enter
 TIMING_MAX_REMAINING: int = 250       # don't enter in the first 40s (< this = too early)
@@ -182,8 +158,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 # TRADE SIZING
 # ──────────────────────────────────────────────
-TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade (HIGH tier = 100%)
-TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
+TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 10000.0       # halt if daily P&L < -$10
 
@@ -228,19 +203,15 @@ MARKET_MIN_VOLUME_USD: float = 100.0  # skip markets with too little volume
 # Trade only fires if final score >= MIN_COMBINED_SCORE.
 #
 SCORE_WEIGHTS: dict = {
-    "odds":      0.25,
-    "direction": 0.45,
-    "timing":    0.30,
-    "spread":    0.00,     # pass/fail gate only — no score contribution (near-constant ~85 inflated combined)
-    "chase":     0.00,     # pass/fail gate only — no score contribution (near-constant ~100 inflated combined)
+    "odds":      0.20,
+    "direction": 0.35,
+    "timing":    0.25,
+    "spread":    0.10,
+    "chase":     0.10,
 }
-MIN_COMBINED_SCORE: float = 45.0      # minimum composite score (now only direction+odds+timing); lowered 55→45 since tiered sizing (LOW/MED/HIGH) now absorbs weaker signals instead of a hard skip
+MIN_COMBINED_SCORE: float = 55.0      # minimum composite score to place trade
+MIN_DIRECTION_FILTER_SCORE: float = 15.0  # hard floor: direction score < 15 → skip regardless of combined
 MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
-# Disabled for now — timing already feeds combined_score at 30% weight, and this
-# hard floor has no skip-reason telemetry yet to show whether it's earning its
-# keep vs. just cutting frequency (see docs/optimizations, direction weak_skip
-# discussion). Flip back on via env var once the funnel data says it's worth it.
-MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "false").lower() == "true"
 
 
 @dataclass
@@ -267,7 +238,6 @@ class TradeDecision:
     combined_score: float
     filter_results: dict  # name → FilterResult
     market_end_ts: float = 0.0  # market resolution time (unix s), for settlement
-    trade_size_usd: float = 0.0  # dynamic size based on confidence tier (0 = use default TRADE_SIZE_USD)
     skip_reason: Optional[str] = None
 
     def __str__(self) -> str:
