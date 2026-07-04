@@ -544,14 +544,9 @@
     border-bottom: 1px solid var(--border);
   }
   .main-row > .btc-chart-card { grid-area: chart; border-right: 1px solid var(--border); min-width: 0; }
-  /* Grid items stretch to the row's height by default — the row height is
-     set by the chart card (fixed at 460px, see .btc-chart-card .chart-wrap).
-     Make this section a flex column so .history-container (flex:1 below)
-     grows to fill that same height instead of sitting at its old fixed
-     280px, so the two cards in this row line up. Desktop only — the mobile
-     media query below restores the original fixed height. */
-  .main-row > .position-history-section { grid-area: history; min-width: 0; display: flex; flex-direction: column; }
-  .main-row > .position-history-section .history-container { flex: 1; height: auto; min-height: 0; }
+  /* Height is matched to the chart card in JS (see syncHistoryHeightToChart),
+     not CSS — desktop only, applied/removed there based on viewport width. */
+  .main-row > .position-history-section { grid-area: history; min-width: 0; }
   .main-row > .open-positions-section { grid-area: positions; border-top: 1px solid var(--border); min-width: 0; }
 
   /* ── Mobile / narrow screens ─────────────────
@@ -590,10 +585,10 @@
     .main-row { grid-template-columns: 1fr; grid-template-areas: none; }
     .main-row > .btc-chart-card { grid-area: auto; order: 1; border-right: none; border-bottom: 1px solid var(--border); }
     .main-row > .open-positions-section { grid-area: auto; order: 2; border-top: none; border-bottom: 1px solid var(--border); }
-    .main-row > .position-history-section { grid-area: auto; order: 3; border-bottom: 1px solid var(--border); display: block; }
-    /* Undo the desktop-only "match the chart's height" flex sizing — keep the
-       original fixed ~6-row height on mobile. */
-    .main-row > .position-history-section .history-container { flex: none; height: 280px; }
+    .main-row > .position-history-section { grid-area: auto; order: 3; border-bottom: 1px solid var(--border); }
+    /* JS only measures/applies the matched height above 768px (see
+       syncHistoryHeightToChart) and clears the inline style below it, so no
+       CSS override is needed here — this comment just documents why. */
 
     /* Wide tables scroll sideways instead of squishing/wrapping */
     .table-scroll,
@@ -1295,6 +1290,11 @@ function initPnlChart() {
     },
     handleScroll: false,
     handleScale: false,
+    // The crosshair only follows the mouse by default — on touch devices
+    // there's no "hover", so without this a finger drag does nothing.
+    // trackingMode makes a touch-drag scrub the crosshair along the curve,
+    // released when the finger lifts.
+    trackingMode: { exitMode: LightweightCharts.TrackingModeExitMode.OnTouchEnd },
   });
 
   // Baseline series: colors above/below the zero line differently (green in
@@ -1413,6 +1413,34 @@ $('pnlRanges').addEventListener('click', e => {
   applyPnlRange(btn.dataset.range);
 });
 
+// Desktop only: make Position History's visible height match the BTC chart
+// card's actual rendered height, so the two cards in that row line up.
+// Measured directly in JS (not left to CSS grid/flex stretch) so it's exact
+// regardless of layout subtleties — mobile clears the inline style entirely
+// and falls back to the CSS's fixed ~6-row height untouched.
+const MOBILE_BREAKPOINT_PX = 768;
+
+function syncHistoryHeightToChart() {
+  const historyContainer = $('historyContainer');
+  const chartCard = document.querySelector('.btc-chart-card');
+  const header = document.querySelector('.position-history-section .section-header');
+  if (!historyContainer || !chartCard || !header) return;
+
+  if (window.innerWidth <= MOBILE_BREAKPOINT_PX) {
+    historyContainer.style.height = '';   // clear override — CSS's fixed 280px applies
+    return;
+  }
+  const height = Math.max(80, chartCard.offsetHeight - header.offsetHeight);
+  historyContainer.style.height = height + 'px';
+}
+
+window.addEventListener('resize', syncHistoryHeightToChart);
+window.addEventListener('load', syncHistoryHeightToChart);
+// Layout can still shift slightly after fonts/chart finish their first paint —
+// a couple of delayed re-checks catch that without needing a ResizeObserver.
+setTimeout(syncHistoryHeightToChart, 300);
+setTimeout(syncHistoryHeightToChart, 1000);
+
 // ── WebSocket ──────────────────────────────────
 let ws = null;
 
@@ -1486,6 +1514,7 @@ function render(d) {
   updateBtcChart(d.btc_price, d.btc_target, positions);
   updateTradeMarkers(history);
   updatePnlChart(d.pnl_series);
+  syncHistoryHeightToChart();
 
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0
