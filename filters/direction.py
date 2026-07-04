@@ -46,8 +46,11 @@ from config import (
 # ─────────────────────────────────────────────
 # Direction score history for smoothing
 # ─────────────────────────────────────────────
-# Stores (timestamp, combined_score)
-_score_history: deque = deque(maxlen=100)
+# Stores (timestamp, combined_score). Sized for DIRECTION_CONSISTENCY_WINDOW
+# (100s) at roughly one append per ~2s main-loop cycle, times a safety margin
+# for faster ticks — if this is ever smaller than the window actually needs,
+# consistency silently truncates to whatever fits instead of erroring.
+_score_history: deque = deque(maxlen=200)
 
 # ─────────────────────────────────────────────
 # Skip/tier stats — makes the funnel visible (previously only log.debug,
