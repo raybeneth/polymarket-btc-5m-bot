@@ -307,6 +307,57 @@
   .negative { color: var(--red); }
   .neutral  { color: var(--text); }
 
+  /* ── Profit/Loss history card (cumulative, all positions) ──────── */
+  .pnl-card {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px 4px;
+  }
+  .pnl-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pnl-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .pnl-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  .pnl-ranges { display: flex; gap: 4px; }
+  .pnl-ranges button {
+    font-family: var(--font);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 9px;
+    cursor: pointer;
+  }
+  .pnl-ranges button:hover { color: var(--text); }
+  .pnl-ranges button.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(39,166,154,0.10);
+  }
+  .pnl-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .pnl-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 8px; }
+  .pnl-chart-wrap { height: 110px; position: relative; }
+
   /* ── Chart card ─────────────────────────── */
   .chart-card {
     background: var(--card);
@@ -402,6 +453,7 @@
     pointer-events: auto;
     cursor: move;
     user-select: none;
+    touch-action: none; /* let JS own the gesture instead of the browser scrolling/zooming under a drag */
   }
   .trade-label.dragging {
     z-index: 10;
@@ -476,19 +528,31 @@
 
   .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
 
-  /* ── Main row: BTC chart (left) + Open Positions (right) ─────── */
+  /* ── Main row (desktop): BTC chart + Position History side by side on top,
+     Open Positions full-width below. Mobile overrides this back to the
+     original chart → Open Positions → Position History stacking order via
+     grid-area:auto + order, in the media query below — see that block for
+     why this needs explicit per-section rules rather than a generic
+     ":last-child" border rule (named-area placement decouples visual order
+     from DOM order, so "last child" no longer means "visually last"). */
   .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "chart     history"
+      "positions positions";
     border-bottom: 1px solid var(--border);
   }
-  .main-row > .btc-chart-card,
-  .main-row > .section {
-    border-bottom: none;
-    border-right: 1px solid var(--border);
-    min-width: 0;
-  }
-  .main-row > *:last-child { border-right: none; }
+  .main-row > .btc-chart-card { grid-area: chart; border-right: 1px solid var(--border); min-width: 0; }
+  /* Grid items stretch to the row's height by default — the row height is
+     set by the chart card (fixed at 460px, see .btc-chart-card .chart-wrap).
+     Make this section a flex column so .history-container (flex:1 below)
+     grows to fill that same height instead of sitting at its old fixed
+     280px, so the two cards in this row line up. Desktop only — the mobile
+     media query below restores the original fixed height. */
+  .main-row > .position-history-section { grid-area: history; min-width: 0; display: flex; flex-direction: column; }
+  .main-row > .position-history-section .history-container { flex: 1; height: auto; min-height: 0; }
+  .main-row > .open-positions-section { grid-area: positions; border-top: 1px solid var(--border); min-width: 0; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -519,10 +583,17 @@
     .btc-chart-card { height: 400px; }
     .btc-chart-card .chart-wrap { height: 330px; }
 
-    /* Stack the main row (chart above Open Positions), divided by a line */
-    .main-row { grid-template-columns: 1fr; }
-    .main-row > .btc-chart-card,
-    .main-row > .section { border-right: none; border-bottom: 1px solid var(--border); }
+    /* Stack the main row in the ORIGINAL order regardless of the desktop
+       swap above: chart → Open Positions → Position History. Named grid
+       areas don't apply on a single column, so fall back to plain
+       top-to-bottom stacking via `order` on each section. */
+    .main-row { grid-template-columns: 1fr; grid-template-areas: none; }
+    .main-row > .btc-chart-card { grid-area: auto; order: 1; border-right: none; border-bottom: 1px solid var(--border); }
+    .main-row > .open-positions-section { grid-area: auto; order: 2; border-top: none; border-bottom: 1px solid var(--border); }
+    .main-row > .position-history-section { grid-area: auto; order: 3; border-bottom: 1px solid var(--border); display: block; }
+    /* Undo the desktop-only "match the chart's height" flex sizing — keep the
+       original fixed ~6-row height on mobile. */
+    .main-row > .position-history-section .history-container { flex: none; height: 280px; }
 
     /* Wide tables scroll sideways instead of squishing/wrapping */
     .table-scroll,
@@ -646,7 +717,27 @@
   </div>
 </div>
 
-<!-- Stats grid (P&L chart removed) -->
+<!-- Cumulative Profit/Loss (all positions), styled after Polymarket's own P&L widget -->
+<div class="pnl-card">
+  <div class="pnl-header">
+    <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
+    <div class="pnl-ranges" id="pnlRanges">
+      <button type="button" data-range="1D">1D</button>
+      <button type="button" data-range="1W">1W</button>
+      <button type="button" data-range="1M">1M</button>
+      <button type="button" data-range="1Y">1Y</button>
+      <button type="button" data-range="YTD">YTD</button>
+      <button type="button" data-range="ALL" class="active">ALL</button>
+    </div>
+  </div>
+  <div class="pnl-balance" id="pnlBalance">$0.00</div>
+  <div class="pnl-sub" id="pnlSub">&nbsp;</div>
+  <div class="pnl-chart-wrap">
+    <div id="pnlChart" style="width:100%;height:100%"></div>
+  </div>
+</div>
+
+<!-- Stats grid -->
 <div class="stats-row">
 
   <div class="stats">
@@ -684,7 +775,7 @@
     </div>
     <div class="btc-target-label">
       <span id="btcTargetLabel">Reference Target —</span><span class="btc-countdown" id="btcCountdown"></span
-      ><span class="btc-marker-legend">▲下方=买YES ▼上方=买NO · <b class="positive">绿</b>=赢 <b class="negative">红</b>=亏 · 数字=盈亏(USD)</span>
+      >
     </div>
     <div class="chart-wrap">
       <div id="btcChart" style="width:100%;height:100%"></div>
@@ -693,7 +784,24 @@
     </div>
   </div>
 
-  <div class="section">
+  <div class="section position-history-section">
+    <div class="section-header">
+      <span class="section-title">Position History</span>
+      <span style="color:var(--text-dim);font-size:10px" id="histCount">0</span>
+    </div>
+    <div class="history-container" id="historyContainer">
+      <table class="positions-table">
+        <thead>
+          <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
+        </thead>
+        <tbody id="histBody">
+          <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section open-positions-section">
     <div class="section-header">
       <span class="section-title">Open Positions</span>
       <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
@@ -710,24 +818,6 @@
     </div>
   </div>
 
-</div>
-
-<!-- Position History — full width -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Position History</span>
-    <span style="color:var(--text-dim);font-size:10px" id="histCount">0</span>
-  </div>
-  <div class="history-container" id="historyContainer">
-    <table class="positions-table">
-      <thead>
-        <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
-      </thead>
-      <tbody id="histBody">
-        <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
-      </tbody>
-    </table>
-  </div>
 </div>
 
 <!-- Live Log — full width -->
@@ -1122,8 +1212,13 @@ function _drawConnector(svg, ax, ay, boxLeft, boxTop, color) {
 }
 
 function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
-  box.addEventListener('mousedown', e => {
+  // Pointer Events unify mouse/touch/pen in one code path — this is what
+  // makes dragging work with a finger on mobile, not just a mouse. Paired
+  // with `touch-action: none` on .trade-label (CSS) so the browser doesn't
+  // try to scroll/zoom the page out from under the drag gesture.
+  box.addEventListener('pointerdown', e => {
     e.preventDefault();
+    box.setPointerCapture(e.pointerId);
     _draggingOrderId = orderId;
     box.classList.add('dragging');
     const startX = e.clientX, startY = e.clientY;
@@ -1150,16 +1245,173 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
       path.setAttribute('d', `M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${endY}, ${cx} ${endY}`);
     }
     function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      box.removeEventListener('pointermove', onMove);
+      box.removeEventListener('pointerup', onUp);
+      box.removeEventListener('pointercancel', onUp);
       box.classList.remove('dragging');
       _labelOffsets.set(orderId, { dx: box.offsetLeft - defaultLeft, dy: box.offsetTop - defaultTop });
       _draggingOrderId = null;
     }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    box.addEventListener('pointermove', onMove);
+    box.addEventListener('pointerup', onUp);
+    box.addEventListener('pointercancel', onUp);
   });
 }
+
+// ── Cumulative Profit/Loss chart (all positions), Polymarket-widget style ──
+let _pnlChart = null;
+let _pnlSeries = null;
+let _pnlFullSeries = [];   // full {t,v} chronological series from the backend
+let _pnlRange = 'ALL';
+
+const PNL_RANGE_SECONDS = { '1D': 86400, '1W': 7 * 86400, '1M': 30 * 86400, '1Y': 365 * 86400 };
+
+function _pnlRangeCutoff(range) {
+  if (range === 'ALL') return 0;
+  const now = Math.floor(Date.now() / 1000);
+  if (range === 'YTD') {
+    const d = new Date();
+    return Date.UTC(d.getUTCFullYear(), 0, 1) / 1000;
+  }
+  return now - PNL_RANGE_SECONDS[range];
+}
+
+function initPnlChart() {
+  const container = $('pnlChart');
+  _pnlChart = LightweightCharts.createChart(container, {
+    autoSize: true,
+    layout: {
+      background: { type: 'solid', color: 'transparent' },
+      textColor: '#7a9aaa',
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      fontSize: 10,
+    },
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    rightPriceScale: { visible: false },
+    timeScale: { visible: false, borderVisible: false },
+    crosshair: {
+      horzLine: { visible: false, labelVisible: false },
+      vertLine: { color: '#27a69a', width: 1, style: 3, labelVisible: false },
+    },
+    handleScroll: false,
+    handleScale: false,
+  });
+
+  // Baseline series: colors above/below the zero line differently (green in
+  // profit, red in loss) — the built-in fit for a P&L line, no manual dual-
+  // series hack needed. Same green/red as the rest of the dashboard, not a
+  // new brand hue.
+  _pnlSeries = _pnlChart.addBaselineSeries({
+    baseValue: { type: 'price', price: 0 },
+    topLineColor: '#27a69a',
+    topFillColor1: 'rgba(39,166,154,0.35)',
+    topFillColor2: 'rgba(39,166,154,0.02)',
+    bottomLineColor: '#ef5350',
+    bottomFillColor1: 'rgba(239,83,80,0.02)',
+    bottomFillColor2: 'rgba(239,83,80,0.35)',
+    lineWidth: 2,
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+  });
+
+  // Hover: show the value/date at the crosshair instead of the range's net
+  // change — released back to the range summary when the cursor leaves.
+  _pnlChart.subscribeCrosshairMove(param => {
+    if (!param.time || !param.seriesData) {
+      _renderPnlHeadline();
+      return;
+    }
+    const point = param.seriesData.get(_pnlSeries);
+    if (point) _renderPnlHeadline(point.value, param.time);
+    else _renderPnlHeadline();
+  });
+}
+
+// With no args: shows the net change over the selected range (current
+// cumulative total minus whatever it was just before the range started).
+// With (value, time): shows that single hovered point instead.
+function _renderPnlHeadline(hoverValue, hoverTime) {
+  const balEl = $('pnlBalance'), subEl = $('pnlSub');
+  if (!balEl || !subEl) return;
+
+  if (hoverValue != null) {
+    balEl.textContent = (hoverValue >= 0 ? '+' : '') + '$' + hoverValue.toFixed(2);
+    balEl.className = 'pnl-balance ' + (hoverValue >= 0 ? 'positive' : 'negative');
+    const d = new Date(hoverTime * 1000);
+    subEl.textContent = d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return;
+  }
+
+  const cutoff = _pnlRangeCutoff(_pnlRange);
+  const before = _pnlFullSeries.filter(p => p.t < cutoff);
+  const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
+  const startVal = before.length ? before[before.length - 1].v : 0;
+  const endVal = inRange.length ? inRange[inRange.length - 1].v : startVal;
+  const change = endVal - startVal;
+  balEl.textContent = (change >= 0 ? '+' : '') + '$' + change.toFixed(2);
+  balEl.className = 'pnl-balance ' + (change >= 0 ? 'positive' : 'negative');
+  subEl.textContent = inRange.length
+    ? 'as of ' + new Date(inRange[inRange.length - 1].t * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : 'No closed trades in this range';
+}
+
+// Lightweight Charts only ever draws straight segments between the points you
+// give it — there's no built-in spline/curve option. To get an actual curved
+// line instead of a polyline, densify the real points with a Catmull-Rom
+// spline first; the straight segments between the (now much closer together)
+// interpolated points read as smooth at chart scale. The underlying data is
+// still a step function (each trade closes and the total jumps instantly) —
+// this is purely a visual smoothing to match the requested curved look.
+function _splineInterpolate(points, segmentsPerGap = 10) {
+  if (points.length < 3) return points;
+  const out = [points[0]];
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    for (let s = 1; s <= segmentsPerGap; s++) {
+      const t = s / segmentsPerGap, t2 = t * t, t3 = t2 * t;
+      const value = 0.5 * (
+        2 * p1.value +
+        (p2.value - p0.value) * t +
+        (2 * p0.value - 5 * p1.value + 4 * p2.value - p3.value) * t2 +
+        (3 * p1.value - p0.value - 3 * p2.value + p3.value) * t3
+      );
+      const time = Math.round(p1.time + (p2.time - p1.time) * t);
+      const last = out[out.length - 1];
+      if (time > last.time) out.push({ time, value });   // keep times strictly increasing
+    }
+  }
+  return out;
+}
+
+function applyPnlRange(range) {
+  _pnlRange = range;
+  $('pnlRanges').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+
+  const cutoff = _pnlRangeCutoff(range);
+  const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
+  // The chart needs at least one point to render — seed a flat zero if this
+  // range has no closed trades yet rather than leaving it blank.
+  const data = inRange.length
+    ? _splineInterpolate(inRange.map(p => ({ time: p.t, value: p.v })))
+    : [{ time: cutoff || Math.floor(Date.now() / 1000), value: 0 }];
+  _pnlSeries.setData(data);
+  _pnlChart.timeScale().fitContent();
+  _renderPnlHeadline();
+}
+
+function updatePnlChart(series) {
+  if (!_pnlChart) initPnlChart();
+  _pnlFullSeries = series || [];
+  applyPnlRange(_pnlRange);
+}
+
+$('pnlRanges').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  applyPnlRange(btn.dataset.range);
+});
 
 // ── WebSocket ──────────────────────────────────
 let ws = null;
@@ -1233,6 +1485,7 @@ function render(d) {
   // BTC live 5m candlestick chart (current candle driven by the latest spot tick)
   updateBtcChart(d.btc_price, d.btc_target, positions);
   updateTradeMarkers(history);
+  updatePnlChart(d.pnl_series);
 
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0

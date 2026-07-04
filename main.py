@@ -277,6 +277,24 @@ def _build_web_state() -> dict:
         if btc_target is not None:
             _target_cache[window_start] = btc_target
 
+    # Cumulative P&L over time for the dashboard's Profit/Loss chart.
+    # _recent_closed is newest-first (closed_at DESC); walk it in chronological
+    # order to build a running total, one point per closed trade. Two trades
+    # closing in the same second collapse into one point (last value wins) —
+    # the chart library requires strictly increasing, unique timestamps.
+    pnl_series = []
+    running = 0.0
+    for h in reversed(_recent_closed):
+        running += h["pnl"] or 0.0
+        ts = h["closed_at"] or h["opened_at"]
+        if not ts:
+            continue
+        ts = int(ts)
+        if pnl_series and pnl_series[-1]["t"] == ts:
+            pnl_series[-1]["v"] = round(running, 4)
+        else:
+            pnl_series.append({"t": ts, "v": round(running, 4)})
+
     return {
         "btc_price": btc_price.get_latest(),
         "btc_connected": btc_price.is_connected(),
@@ -296,6 +314,7 @@ def _build_web_state() -> dict:
             "pnl": round(_history.get("total_pnl", 0.0), 4),
         },
         "positions": positions,
+        "pnl_series": pnl_series,
         "history": [
             {
                 "side": h["side"],
