@@ -185,7 +185,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade (HIGH tier = 100%)
 TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
-MAX_DAILY_LOSS_USD: float = 20.0       # halt if daily P&L < -$10
+MAX_DAILY_LOSS_USD: float = 10000.0       # halt if daily P&L < -$10
 
 
 # ──────────────────────────────────────────────
