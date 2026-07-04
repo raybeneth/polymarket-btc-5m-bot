@@ -53,3 +53,15 @@ CREATE TABLE IF NOT EXISTS logs (
     line       TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Dashboard nav menu: links to other running strategy instances (different
+-- ports/domains). Managed by hand (INSERT/UPDATE directly) — no admin UI.
+CREATE TABLE IF NOT EXISTS strategy_links (
+    id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name       VARCHAR(64)  NOT NULL,
+    url        VARCHAR(255) NOT NULL,
+    enabled    TINYINT(1)   NOT NULL DEFAULT 1,
+    sort_order INT          NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

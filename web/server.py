@@ -143,6 +143,15 @@ async def _handle_api_optimizations(request: web.Request) -> web.Response:
     return web.json_response(items)
 
 
+async def _handle_api_strategy_links(request: web.Request) -> web.Response:
+    """Other running strategy instances (name + URL) for the dashboard nav menu.
+    Configured directly in the strategy_links MySQL table — no admin UI."""
+    from storage import db
+    loop = asyncio.get_event_loop()
+    links = await loop.run_in_executor(None, db.get_strategy_links)
+    return web.json_response(links)
+
+
 async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -219,6 +228,7 @@ async def start_web_server() -> None:
     app.router.add_get("/api/klines", _handle_api_klines)
     app.router.add_get("/api/price", _handle_api_price)
     app.router.add_get("/api/optimizations", _handle_api_optimizations)
+    app.router.add_get("/api/strategy_links", _handle_api_strategy_links)
     app.router.add_get("/ws", _handle_ws)
     app.router.add_static("/static/", _STATIC_DIR)
 

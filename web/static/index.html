@@ -1144,7 +1144,29 @@ async function loadOptimizations() {
     }
   }
 }
-loadOptimizations();
+
+// Populate the drawer with links to other running strategy instances
+// (name + url configured in the strategy_links MySQL table). Chained after
+// loadOptimizations() resolves so the append order is always CLICK-ME →
+// optimization records → strategy links, regardless of which fetch returns
+// first (both run concurrently otherwise, racing on menu.appendChild order).
+async function loadStrategyLinks() {
+  let links = [];
+  try {
+    const res = await fetch('/api/strategy_links');
+    if (res.ok) links = await res.json();
+  } catch (e) { /* leave menu without extra links */ }
+  const menu = $('drawerMenu');
+  links.forEach(l => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'drawer-item';
+    btn.innerHTML = `<span class="di-title">🔗 ${escHtml(l.name)}</span><span class="di-sub">${escHtml(l.url)}</span>`;
+    btn.addEventListener('click', () => { closeDrawer(); window.open(l.url, '_blank'); });
+    menu.appendChild(btn);
+  });
+}
+loadStrategyLinks().then(loadOptimizations);
 
 // Unified Escape: close whichever overlay is open (doc → strategy → drawer).
 document.addEventListener('keydown', e => {

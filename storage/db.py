@@ -303,3 +303,17 @@ def load_open_positions() -> list[OpenPosition]:
         )
         for row in rows
     ]
+
+
+def get_strategy_links() -> list[dict]:
+    """Other running strategy instances for the dashboard nav menu."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, url FROM strategy_links "
+                "WHERE enabled = 1 ORDER BY sort_order ASC, id ASC"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
