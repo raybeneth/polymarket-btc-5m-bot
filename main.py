@@ -18,6 +18,7 @@ One trade per market per market-lifetime (deduplication via `_traded_markets`).
 import asyncio
 import logging
 import time
+from typing import Optional
 
 import aiohttp
 
@@ -34,6 +35,7 @@ from config import (
     DIRECTION_CONSISTENCY_FLOOR,
     DIRECTION_MED_MIN_SCORE,
     STOP_LOSS_RATIO,
+    ACCOUNT_BALANCE_USD,
     TradeDecision,
 )
 from feeds import btc_price
@@ -64,6 +66,10 @@ _target_cache: dict[int, float] = {}
 # Last time the direction-filter skip/tier funnel summary was printed.
 _last_stats_report: float = 0.0
 STATS_REPORT_INTERVAL: float = 300.0  # 5 minutes
+
+# Live mode's wallet USDC balance, polled periodically (see main_loop) — paper
+# mode uses the DB-backed RiskState.balance instead, no polling needed.
+_wallet_balance: Optional[float] = None
 
 
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
@@ -300,6 +306,7 @@ def _build_web_state() -> dict:
         "btc_connected": btc_price.is_connected(),
         "btc_history": btc_price.get_chart_series(),
         "btc_target": round(btc_target, 2) if btc_target is not None else None,
+        "account_balance": state.balance if PAPER_TRADING else _wallet_balance,
         "markets_count": len(get_active_markets()),
         "today": {
             "trades": state.trades_today,
@@ -337,7 +344,7 @@ def _build_web_state() -> dict:
 
 
 async def main_loop() -> None:
-    global _history, _start_time, _recent_closed, _last_stats_report
+    global _history, _start_time, _recent_closed, _last_stats_report, _wallet_balance
     _start_time = time.time()
     _last_stats_report = _start_time
 
@@ -369,6 +376,12 @@ async def main_loop() -> None:
     state.wins_today = _history.get("today_wins", 0)
     state.losses_today = _history.get("today_losses", 0)
     state.daily_pnl = _history.get("today_pnl", 0.0)
+
+    # Paper-mode virtual balance: seeded from ACCOUNT_BALANCE_USD only on the
+    # very first-ever startup — the DB row is authoritative after that, so
+    # restarts don't reset it back to the starting value.
+    state.balance = await loop.run_in_executor(None, db.get_or_init_balance, ACCOUNT_BALANCE_USD)
+    log.info(f"账户余额已加载: ${state.balance:.2f}")
 
     # Restore any positions still OPEN in the DB (e.g. after a restart)
     state.open_positions = await loop.run_in_executor(None, db.load_open_positions)
@@ -409,6 +422,12 @@ async def main_loop() -> None:
                 # every ~5 loops instead of every loop to keep the hot path lean.
                 if loop_count % 5 == 1:
                     _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, None)
+                # Live mode's dashboard balance is the real wallet — a network
+                # call, so poll it far less often than the hot path (~every 15
+                # loops / 30s). Paper mode never touches this; its balance is
+                # the DB-backed RiskState.balance, updated inline on open/close.
+                if not PAPER_TRADING and loop_count % 15 == 1:
+                    _wallet_balance = await loop.run_in_executor(None, order_manager.get_wallet_balance_usdc)
             except (ConnectionResetError, aiohttp.ClientError, OSError) as exc:
                 log.warning(f"网络异常，跳过本轮循环: {exc}")
 

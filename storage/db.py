@@ -282,7 +282,7 @@ def load_open_positions() -> list[OpenPosition]:
             cur.execute(
                 """
                 SELECT order_id, market_id, token_id, side, entry_price, shares,
-                       opened_at, market_end_ts
+                       usd_size, opened_at, market_end_ts
                 FROM positions WHERE status='OPEN'
                 """
             )
@@ -297,12 +297,42 @@ def load_open_positions() -> list[OpenPosition]:
             side=row["side"],
             entry_price=float(row["entry_price"]),
             shares=float(row["shares"]),
+            usd_size=float(row["usd_size"]),
             opened_at=_to_ts(row["opened_at"]),
             order_id=row["order_id"],
             market_end_ts=_to_ts(row["market_end_ts"]),
         )
         for row in rows
     ]
+
+
+def get_or_init_balance(seed: float) -> float:
+    """First-ever startup: seed the account balance from `seed`. After that,
+    the DB row is authoritative — restarts don't reset it."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT balance FROM account_state WHERE id = 1")
+            row = cur.fetchone()
+            if row is not None:
+                return float(row["balance"])
+            cur.execute("INSERT INTO account_state (id, balance) VALUES (1, %s)", (seed,))
+            return seed
+    finally:
+        conn.close()
+
+
+def update_balance(balance: float) -> None:
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO account_state (id, balance) VALUES (1, %s) "
+                "ON DUPLICATE KEY UPDATE balance = %s",
+                (balance, balance),
+            )
+    finally:
+        conn.close()
 
 
 def get_strategy_links() -> list[dict]:

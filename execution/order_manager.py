@@ -66,6 +66,24 @@ def _get_clob_client():
     return _clob_client
 
 
+def get_wallet_balance_usdc() -> Optional[float]:
+    """
+    Live mode's dashboard balance: the wallet's real USDC balance on Polymarket,
+    not a simulated ledger — paper mode has its own DB-backed balance instead
+    (see execution.risk.RiskState.balance). Polling only, never gates trades;
+    the exchange itself already rejects orders that exceed available funds.
+    """
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        client = _get_clob_client()
+        resp = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+        raw = resp.get("balance") if isinstance(resp, dict) else None
+        return float(raw) / 1_000_000 if raw is not None else None  # USDC = 6 decimals
+    except Exception as exc:
+        log.warning(f"[实盘] 查询钱包USDC余额失败: {exc}")
+        return None
+
+
 # ─────────────────────────────────────────────
 # Paper trading
 # ─────────────────────────────────────────────
@@ -73,13 +91,13 @@ def _get_clob_client():
 async def _paper_execute(decision: TradeDecision) -> bool:
     """Simulate a fill and record a paper position."""
     state = get_state()
-    ok, reason = state.can_trade()
+    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
+    ok, reason = state.can_trade(actual_size)
     if not ok:
         log.warning(f"[模拟] 风控拦截: {reason}")
         return False
 
     simulated_fill_price = decision.entry_price + ORDER_PRICE_SLIPPAGE
-    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
     shares = actual_size / simulated_fill_price
 
     order_id = f"PAPER-{uuid.uuid4().hex[:8]}"
@@ -92,6 +110,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         opened_at=time.time(),
         order_id=order_id,
         market_end_ts=decision.market_end_ts,
+        usd_size=actual_size,
     )
     state.record_open(pos)
 
@@ -112,6 +131,7 @@ async def _paper_execute(decision: TradeDecision) -> bool:
             {k: v.score for k, v in decision.filter_results.items()},
         ),
     )
+    await asyncio.get_event_loop().run_in_executor(None, lambda: db.update_balance(state.balance))
     log_trade({
         "mode": "paper",
         "order_id": order_id,
@@ -326,6 +346,7 @@ async def check_early_exits(session) -> None:
             await asyncio.get_event_loop().run_in_executor(
                 None, lambda: db.close_position(pos.order_id, exit_price, exit_reason)
             )
+            await asyncio.get_event_loop().run_in_executor(None, lambda: db.update_balance(state.balance))
             result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
             log_position_close(
                 order_id=pos.order_id,
@@ -438,6 +459,7 @@ async def resolve_expired_positions() -> None:
             await asyncio.get_event_loop().run_in_executor(
                 None, lambda: db.close_position(pos.order_id, exit_price, "SETTLE")
             )
+            await asyncio.get_event_loop().run_in_executor(None, lambda: db.update_balance(state.balance))
             log_position_close(
                 order_id=pos.order_id,
                 market_id=pos.market_id,

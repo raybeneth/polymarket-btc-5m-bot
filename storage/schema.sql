@@ -65,3 +65,13 @@ CREATE TABLE IF NOT EXISTS strategy_links (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Paper-trading account balance — a single row (id=1), seeded once from
+-- ACCOUNT_BALANCE_USD on first-ever startup, then the DB is authoritative.
+-- Debited on open (by the position's usd_size), credited back (usd_size +
+-- pnl) on close. Not used in live mode — that reads the real wallet balance.
+CREATE TABLE IF NOT EXISTS account_state (
+    id         TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+    balance    DECIMAL(14,4) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

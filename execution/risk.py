@@ -26,6 +26,7 @@ class OpenPosition:
     opened_at: float     # unix timestamp
     order_id: str
     market_end_ts: float = 0.0  # market resolution time (unix s); 0 = unknown (legacy)
+    usd_size: float = 0.0  # capital committed at open — credited back (+ pnl) on close
 
 
 @dataclass
@@ -36,6 +37,7 @@ class RiskState:
     trades_today: int = 0
     wins_today: int = 0
     losses_today: int = 0
+    balance: float = 0.0  # paper-mode virtual account balance; synced from/to MySQL by callers
 
     def _refresh_day(self) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -47,17 +49,20 @@ class RiskState:
             self.wins_today = 0
             self.losses_today = 0
 
-    def can_trade(self) -> tuple[bool, str]:
+    def can_trade(self, trade_size_usd: float = 0.0) -> tuple[bool, str]:
         self._refresh_day()
         if len(self.open_positions) >= MAX_CONCURRENT_POSITIONS:
             return False, f"已有 {len(self.open_positions)} 个持仓"
         if self.daily_pnl <= -MAX_DAILY_LOSS_USD:
             return False, f"日亏损上限已触发: {self.daily_pnl:.2f} USD"
+        if trade_size_usd > 0 and self.balance < trade_size_usd:
+            return False, f"余额不足: 剩余{self.balance:.2f} < 需要{trade_size_usd:.2f}"
         return True, "OK"
 
     def record_open(self, position: OpenPosition) -> None:
         self.open_positions.append(position)
         self.trades_today += 1
+        self.balance -= position.usd_size
 
     def record_close(self, market_id: str, exit_price: float) -> Optional[float]:
         """Remove position and return realised P&L (None if not found)."""
@@ -65,6 +70,7 @@ class RiskState:
             if pos.market_id == market_id:
                 pnl = (exit_price - pos.entry_price) * pos.shares
                 self.daily_pnl += pnl
+                self.balance += pos.usd_size + pnl
                 self.open_positions.pop(i)
                 if pnl > 0:
                     self.wins_today += 1
@@ -73,7 +79,7 @@ class RiskState:
                 log.info(
                     f"平仓 {pos.side} {market_id[:12]}… "
                     f"入场={pos.entry_price:.3f} 出场={exit_price:.3f} "
-                    f"盈亏={pnl:+.4f} 日累计={self.daily_pnl:+.4f}"
+                    f"盈亏={pnl:+.4f} 日累计={self.daily_pnl:+.4f} 余额={self.balance:.2f}"
                 )
                 return pnl
         return None

@@ -187,6 +187,11 @@ TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier 
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = 10000.0       # halt if daily P&L < -$10
 
+# Starting account balance for the dashboard's Profit/Loss widget — displayed
+# balance/curve is this plus cumulative P&L, not raw P&L from zero. Purely a
+# display baseline; doesn't affect trade sizing, risk gates, or PnL math.
+ACCOUNT_BALANCE_USD: float = float(os.getenv("ACCOUNT_BALANCE_USD", "10000.0"))
+
 
 # ──────────────────────────────────────────────
 # ORDER EXECUTION
