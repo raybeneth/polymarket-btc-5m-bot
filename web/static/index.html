@@ -993,8 +993,38 @@ async function loadBtcKlines() {
   _btcKlineTimer = setTimeout(loadBtcKlines, got ? 60000 : 3000);
 }
 
+// Occasional network hiccups (WS reconnect, a failed REST kline refresh) can
+// leave a 5-min bucket with no data at all — neither a live tick nor a
+// backfilled kline landed in that window before it closed. Lightweight
+// Charts renders a missing time as a visual gap/break in the candlestick
+// series. Rather than chase every possible timing edge case that could cause
+// one, paper over small gaps at render time: synthesize a flat candle (at
+// the previous close) for any missing bucket, so a brief blip never shows up
+// as a broken chart. Gaps beyond MAX_GAP_FILL_BUCKETS are left alone — that's
+// long enough to be a real outage worth seeing, not a blip worth hiding.
+const MAX_GAP_FILL_BUCKETS = 20; // 20 x 5min = 100 minutes
+
+function _fillCandleGaps(sorted) {
+  if (sorted.length < 2) return sorted;
+  const filled = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur = sorted[i];
+    let prev = filled[filled.length - 1];
+    const missing = Math.round((cur.time - prev.time) / 300) - 1;
+    if (missing > 0 && missing <= MAX_GAP_FILL_BUCKETS) {
+      for (let t = prev.time + 300; t < cur.time; t += 300) {
+        filled.push({ time: t, open: prev.close, high: prev.close, low: prev.close, close: prev.close });
+        prev = filled[filled.length - 1];
+      }
+    }
+    filled.push(cur);
+  }
+  return filled;
+}
+
 function sortedBtcCandles() {
-  return Array.from(_btcCandles.values()).sort((a, b) => a.time - b.time);
+  const sorted = Array.from(_btcCandles.values()).sort((a, b) => a.time - b.time);
+  return _fillCandleGaps(sorted);
 }
 
 // Feed a spot price tick into the current 5-min bucket's candle (called by
