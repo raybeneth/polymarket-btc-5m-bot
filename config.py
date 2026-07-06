@@ -123,13 +123,23 @@ DIRECTION_CONSISTENCY_FLOOR: float = 0.30     # <30% = pure noise → hard skip 
 # "persistent near-noise" out of MED — it falls through to LOW (25%) instead.
 DIRECTION_MED_MIN_SCORE: float = 10.0         # filter_score floor for the MED tier
 
+# HIGH tier requires direction to be genuinely strong — not just technically
+# above the minimum. Without this floor, timing(99)+odds(90) can push
+# combined_score above 60 while direction sits at 21 (barely passing), which
+# still qualifies for full $1000 sizing. 14 consecutive stops showed this
+# exact pattern: combined≥60 carried by timing+odds, direction 12-25.
+# Setting this to 40 means raw direction score must be ≥52 (out of 100)
+# before a $1000 bet is placed. Falls through to MED ($500) otherwise.
+DIRECTION_HIGH_MIN_SCORE: float = 40.0        # min filter_score for HIGH tier (was implicitly 20)
+
 # Reversal guard — last-look freshness check performed immediately before
 # order execution (not a duplicate of the 60s consistency window above).
 # Looks at BTC price movement over this short horizon; if it has already
 # reversed hard against our intended side, we abandon this attempt instead
-# of firing into a stale signal. Matters more now that STOP_LOSS is disabled
-# (a wrong entry rides to full settlement instead of a partial stop-loss exit).
-DIRECTION_REVERSAL_GUARD_WINDOW: float = 12.0  # seconds
+# of firing into a stale signal. Extended from 12s to 30s: the 14-loss
+# analysis showed entries at local extremes with reversals happening within
+# 7-25s — a 12s window was too narrow to catch trend exhaustion.
+DIRECTION_REVERSAL_GUARD_WINDOW: float = 30.0  # seconds (was 12.0)
 
 
 # ──────────────────────────────────────────────

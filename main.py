@@ -34,6 +34,7 @@ from config import (
     DIRECTION_CONSISTENCY_LOW,
     DIRECTION_CONSISTENCY_FLOOR,
     DIRECTION_MED_MIN_SCORE,
+    DIRECTION_HIGH_MIN_SCORE,
     STOP_LOSS_RATIO,
     ACCOUNT_BALANCE_USD,
     TradeDecision,
@@ -176,8 +177,12 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
     # Confidence tier → trade size. Only noise (checked above) is a hard skip;
     # every other passed signal fires, sized by how much it's trusted.
-    # HIGH requires direction itself to be strong (filter≥20) AND persistent
-    # (consistency≥80%), not just odds+timing carrying the combined score.
+    # HIGH requires direction itself to be genuinely strong (filter≥DIRECTION_HIGH_MIN_SCORE=40)
+    # AND persistent (consistency≥80%), not just odds+timing carrying the combined score.
+    # The old floor of 20 allowed direction=23 (barely above minimum) to trigger full
+    # $1000 sizing when timing+odds were high — 14 consecutive losses traced to this
+    # exact pattern (see docs/optimizations/011). DIRECTION_HIGH_MIN_SCORE=40 means
+    # the raw direction signal must reach ≥52/100 before a full position fires.
     #
     # MED also requires a small magnitude floor (DIRECTION_MED_MIN_SCORE) in
     # addition to consistency/strong_signal — consistency alone only measures
@@ -186,7 +191,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # to read consistency≥50% gets the same 50% sizing as a genuinely moderate
     # signal (see docs/optimizations/009 — PAPER-25393563, dir_score=1.9,
     # consistency=64% → MED $5, lost -4.27). Falls through to LOW instead.
-    if (combined_score >= 60 and dir_result.score >= 20
+    if (combined_score >= 60 and dir_result.score >= DIRECTION_HIGH_MIN_SCORE
             and consistency >= DIRECTION_CONSISTENCY_HIGH):
         trade_size = TRADE_SIZE_USD                        # 100%
         tier = "HIGH"

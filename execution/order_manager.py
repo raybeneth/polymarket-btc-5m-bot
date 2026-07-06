@@ -97,7 +97,12 @@ async def _paper_execute(decision: TradeDecision) -> bool:
         log.warning(f"[模拟] 风控拦截: {reason}")
         return False
 
-    simulated_fill_price = decision.entry_price + ORDER_PRICE_SLIPPAGE
+    # Paper mode: fill at best_ask (decision.entry_price) without artificial
+    # slippage. Adding ORDER_PRICE_SLIPPAGE in paper mode inflated entry cost
+    # and therefore the stop-loss trigger price, causing earlier-than-realistic
+    # stop-outs and masking the true signal quality (see docs/optimizations/011).
+    # Real-mode still uses best_ask + slippage via limit order placement.
+    simulated_fill_price = decision.entry_price
     shares = actual_size / simulated_fill_price
 
     order_id = f"PAPER-{uuid.uuid4().hex[:8]}"
@@ -310,7 +315,14 @@ async def check_early_exits(session) -> None:
             continue
 
         best_bid = book.best_bid
-        trigger_price = book.mid if book.mid is not None else best_bid
+        # Use best_bid for BOTH trigger judgment and exit fill — previously
+        # trigger used book.mid while exit used best_bid, which created a gap
+        # of up to 10+ cents between when the stop fired and what we actually
+        # received. In illiquid/fast-moving markets mid can be far above best_bid,
+        # so mid-triggered stops routinely exited at much worse prices than intended
+        # (see docs/optimizations/011, e.g. Trade 119: mid≈0.45 triggered but
+        # best_bid=0.34 on exit → extra $107 loss vs expected stop).
+        trigger_price = best_bid
         stop_delta = pos.entry_price * STOP_LOSS_RATIO
         stop_price = pos.entry_price - stop_delta
         tp_price = pos.entry_price + TAKE_PROFIT_DELTA
