@@ -222,6 +222,41 @@ TAKE_PROFIT_DELTA: float = 0.15       # sell if best_bid >= entry_price + 0.15
 FORCE_EXIT_BEFORE_EXPIRY: int = 30    # force exit when ≤30s remain before market settlement
 
 
+# ──────────────────────────────────────────────
+# ENTRY CONFIRMATION — BTC momentum deceleration (Strategy 1)
+# ──────────────────────────────────────────────
+# After the filter pipeline passes, hold off entry until BTC momentum has
+# peaked and is visibly decelerating — or until ENTRY_MAX_WAIT_SECONDS elapses.
+# Every 2s the bot checks whether EITHER condition below is satisfied:
+#
+#   Condition A (flat): |BTC % change in last 20s| < ENTRY_BTC_MAX_VELOCITY
+#     → price has stabilised; entering is safe.
+#
+#   Condition B (decel): per-second rate over 20s < ENTRY_BTC_DECEL_RATIO × per-second rate over 60s
+#     → the initial thrust has peaked; momentum is fading.
+#
+# Unlike a fixed 45s delay, this enters EARLY on stable/decelerating markets
+# (good signals get full payout) and WAITS on fast-moving ones (eliminates
+# the "enter at peak then immediately reversed" pattern that caused 7-27s stops).
+# Hard ceiling ENTRY_MAX_WAIT_SECONDS prevents the market window from expiring.
+#
+# In parallel, a token-price adverse-move guard cancels the pending entry the
+# moment the prediction-market price drops >ENTRY_CONFIRM_MAX_ADVERSE_PCT from
+# the signal price — irrespective of BTC velocity.
+ENTRY_BTC_MAX_VELOCITY: float = 0.001        # 0.1% — BTC barely moving in 20s → enter now
+ENTRY_BTC_DECEL_RATIO: float = 0.40          # 20s rate / 60s rate < 40% → momentum peaked
+ENTRY_MAX_WAIT_SECONDS: float = 60.0         # hard ceiling: enter regardless after this many s
+ENTRY_CONFIRM_MAX_ADVERSE_PCT: float = 0.015  # cancel if token price fell >1.5% from signal
+
+# ──────────────────────────────────────────────
+# CIRCUIT BREAKER (Strategy 5: consecutive loss pause)
+# ──────────────────────────────────────────────
+# After N consecutive losses, pause all new entries for one full candle (5 min).
+# Addresses the "loss cluster" pattern where 3-5 consecutive losses reflect a
+# market regime shift — continuing to trade in the same regime compounds losses.
+CIRCUIT_BREAKER_CONSECUTIVE_LOSSES: int = 3   # pause after this many consecutive losses
+CIRCUIT_BREAKER_PAUSE_SECONDS: float = 300.0  # pause duration in seconds (1 candle)
+
 ORDER_TYPE: str = "GTC"               # Good Till Cancel (we cancel manually if stale)
 ORDER_FILL_TIMEOUT_SECONDS: int = 8   # cancel unfilled order after 8s
 ORDER_PRICE_SLIPPAGE: float = 0.02    # place limit at best_ask + 2 cents
@@ -250,12 +285,11 @@ SCORE_WEIGHTS: dict = {
     "chase":     0.00,     # pass/fail gate only — no score contribution (near-constant ~100 inflated combined)
 }
 MIN_COMBINED_SCORE: float = 45.0      # minimum composite score (now only direction+odds+timing); lowered 55→45 since tiered sizing (LOW/MED/HIGH) now absorbs weaker signals instead of a hard skip
-MIN_TIMING_FILTER_SCORE: float = 20.0     # hard floor: timing score < 20 → skip regardless of combined
-# Disabled for now — timing already feeds combined_score at 30% weight, and this
-# hard floor has no skip-reason telemetry yet to show whether it's earning its
-# keep vs. just cutting frequency (see docs/optimizations, direction weak_skip
-# discussion). Flip back on via env var once the funnel data says it's worth it.
-MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "false").lower() == "true"
+MIN_SPREAD_FILTER_SCORE: float = 65.0     # hard floor: spread filter score < 65 → skip (Strategy 3: 3 losses w/ spread<65, 0 wins below 65)
+MIN_TIMING_FILTER_SCORE: float = 35.0     # hard floor: timing score < 35 → skip regardless of combined (raised from 20; data shows no wins below 46.4, losses at 14.5/20.0)
+# Strategy 2: raised threshold to 35 (was 20) and enabled by default — 2 losses
+# filtered (#127 timing=20, #136 timing=14.5), 0 wins filtered (min win=46.4).
+MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "true").lower() == "true"
 
 
 @dataclass

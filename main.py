@@ -28,6 +28,7 @@ from config import (
     MIN_COMBINED_SCORE,
     MIN_TIMING_FILTER_SCORE,
     MIN_TIMING_FILTER_SCORE_ENABLED,
+    MIN_SPREAD_FILTER_SCORE,
     TRADE_SIZE_USD,
     TRADE_SIZE_LOW_TIER_RATIO,
     DIRECTION_CONSISTENCY_HIGH,
@@ -37,6 +38,11 @@ from config import (
     DIRECTION_HIGH_MIN_SCORE,
     STOP_LOSS_RATIO,
     ACCOUNT_BALANCE_USD,
+    ENTRY_BTC_MAX_VELOCITY,
+    ENTRY_BTC_DECEL_RATIO,
+    ENTRY_MAX_WAIT_SECONDS,
+    ENTRY_CONFIRM_MAX_ADVERSE_PCT,
+    TIMING_MIN_REMAINING,
     TradeDecision,
 )
 from feeds import btc_price
@@ -52,6 +58,10 @@ log = logging.getLogger(__name__)
 
 # Markets we've already traded in this run (prevents double-entry per market)
 _traded_markets: set[str] = set()
+
+# Signals pending the 45-second entry delay confirmation.
+# market_id → (signal_unix_ts, TradeDecision, original_price_at_signal)
+_pending_signals: dict[str, tuple[float, "TradeDecision", float]] = {}
 
 # Historical stats (loaded once at startup)
 _history: dict = {}
@@ -73,6 +83,45 @@ STATS_REPORT_INTERVAL: float = 300.0  # 5 minutes
 _wallet_balance: Optional[float] = None
 
 
+def _btc_entry_ready() -> tuple[bool, str]:
+    """
+    Check whether BTC momentum has decelerated enough for safe entry.
+
+    Two conditions — either one passing allows entry:
+      A) Flat:  |BTC change over last 20s| < ENTRY_BTC_MAX_VELOCITY (0.1%)
+      B) Decel: per-second rate over 20s < ENTRY_BTC_DECEL_RATIO (40%) × rate over 60s
+
+    Falls back to True (enter immediately) when price history is insufficient.
+    """
+    btc_now = btc_price.get_latest()
+    if not btc_now:
+        return True, "无BTC数据，直接入场"
+
+    btc_20s = btc_price.get_price_n_seconds_ago(20)
+    if not btc_20s:
+        return True, "历史数据不足，直接入场"
+
+    vel_20s = abs(btc_now - btc_20s) / btc_20s  # total % change over 20s (unsigned)
+
+    # Condition A: price is flat
+    if vel_20s < ENTRY_BTC_MAX_VELOCITY:
+        return True, f"BTC近20s平稳 {vel_20s:.3%}"
+
+    # Condition B: momentum rate is decelerating vs 60s average
+    btc_60s = btc_price.get_price_n_seconds_ago(60)
+    if btc_60s:
+        vel_60s = abs(btc_now - btc_60s) / btc_60s
+        rate_20s = vel_20s / 20   # % per second
+        rate_60s = vel_60s / 60   # % per second
+        if rate_60s > 0 and (rate_20s / rate_60s) < ENTRY_BTC_DECEL_RATIO:
+            return True, (
+                f"动量减速至 {rate_20s/rate_60s:.0%} "
+                f"(20s:{vel_20s:.3%} / 60s:{vel_60s:.3%})"
+            )
+
+    return False, f"动量过强 {vel_20s:.3%}，继续等待"
+
+
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     """Run the complete filter pipeline for one market."""
     market_id = market.market_id
@@ -83,6 +132,78 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     state = get_state()
     if state.position_for_market(market_id):
         return
+
+    # ── Strategy 1: BTC momentum deceleration confirmation ────────────────
+    # Every ~2s the loop re-enters here for any market with a pending signal.
+    # Each cycle:
+    #   1. Re-fetch order book → check token price adverse move (cancel if >1.5% drop)
+    #   2. Check BTC momentum deceleration (_btc_entry_ready)
+    #      → enter if BTC is flat OR momentum rate has peaked (< 40% of 60s rate)
+    #   3. Hard ceiling: enter regardless once ENTRY_MAX_WAIT_SECONDS (60s) elapsed
+    #      (prevents the market window from expiring while we wait)
+    if market_id in _pending_signals:
+        signal_ts, pending_decision, original_price = _pending_signals[market_id]
+        waited = time.time() - signal_ts
+        side2 = pending_decision.side
+
+        # Re-fetch book every cycle — replaces the normal per-market fetch for
+        # pending signals, so network overhead is unchanged vs the old pipeline.
+        yes_book2, no_book2 = await fetch_both_books(session, market)
+        if yes_book2 is None or no_book2 is None:
+            if waited >= ENTRY_MAX_WAIT_SECONDS:
+                del _pending_signals[market_id]
+                log.info(f"[{mid}] 确认超时: 订单簿不可用，放弃入场")
+            return
+
+        book2 = yes_book2 if side2 == "YES" else no_book2
+        current_price = book2.best_ask
+        if current_price is None:
+            if waited >= ENTRY_MAX_WAIT_SECONDS:
+                del _pending_signals[market_id]
+                log.info(f"[{mid}] 确认超时: 无卖一价，放弃入场")
+            return
+
+        price_chg_pct = (current_price - original_price) / original_price
+
+        # Token price adverse move → cancel immediately regardless of BTC state
+        if price_chg_pct < -ENTRY_CONFIRM_MAX_ADVERSE_PCT:
+            del _pending_signals[market_id]
+            log.info(
+                f"[{mid}] 逆向取消 ({waited:.0f}s): 代币价格 {price_chg_pct:+.1%} "
+                f"(信号={original_price:.3f} 现={current_price:.3f})"
+            )
+            return
+
+        # Momentum check + hard ceiling
+        mom_ready, mom_reason = _btc_entry_ready()
+        force_enter = waited >= ENTRY_MAX_WAIT_SECONDS
+        if not mom_ready and not force_enter:
+            log.debug(
+                f"[{mid}] 等待动量 ({waited:.0f}s): {mom_reason} | "
+                f"代币变动 {price_chg_pct:+.1%}"
+            )
+            return
+
+        # Enter: momentum decelerating or max wait reached
+        del _pending_signals[market_id]
+        reversed_, rev_details = direction.check_reversal(side2, time.time())
+        if reversed_:
+            direction.record_skip("reversal_guard")
+            log.info(f"[{mid}] 动量就绪后反转哨兵拦截: {side2} move={rev_details.get('move_pct')}%")
+            return
+
+        pending_decision.entry_price = current_price
+        entry_reason = f"超时{waited:.0f}s" if force_enter else mom_reason
+        log.info(
+            f"[{mid}] 动量确认入场 ({waited:.0f}s | {entry_reason}): "
+            f"代币变动 {price_chg_pct:+.1%} "
+            f"(信号={original_price:.3f} 现={current_price:.3f})"
+        )
+        filled = await order_manager.execute(pending_decision)
+        if filled:
+            _traded_markets.add(market_id)
+        return
+    # ── End Strategy 1 pending handler ────────────────────────────────────
 
     yes_book, no_book = await fetch_both_books(session, market)
     if yes_book is None or no_book is None:
@@ -148,10 +269,16 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         log.debug(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
-    # Filter 4: Spread (pass/fail gate, no score contribution)
+    # Filter 4: Spread (pass/fail gate + score floor)
     spread_result = spread.check(book, side)
     if not spread_result.passed:
         log.debug(f"[{mid}] 跳过价差: {spread_result.reason}")
+        return
+    if spread_result.score < MIN_SPREAD_FILTER_SCORE:
+        log.debug(
+            f"[{mid}] 跳过价差评分过低: {spread_result.score:.0f} < {MIN_SPREAD_FILTER_SCORE:.0f} "
+            f"(流动性差/价差过宽)"
+        )
         return
 
     # Filter 5: Chase (pass/fail gate, no score contribution)
@@ -238,6 +365,20 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         f"t={elapsed:.0f}s/{remaining:.0f}s"
     )
 
+    # ── Strategy 1: BTC momentum confirmation ─────────────────────────────
+    # Park the signal for momentum-based confirmation if there is enough time
+    # budget. Minimum wait budget = 10s (5 evaluation cycles) to be meaningful;
+    # below that, execute immediately rather than enter right before expiry.
+    wait_budget = remaining - TIMING_MIN_REMAINING - 15
+    if wait_budget >= 10:
+        _pending_signals[market_id] = (time.time(), decision, entry_price)
+        log.info(
+            f"[{mid}] 信号挂起，等待BTC动量衰减 "
+            f"(剩余={remaining:.0f}s, 最长等待={min(ENTRY_MAX_WAIT_SECONDS, wait_budget):.0f}s)"
+        )
+        return
+    # Time budget too tight — skip momentum wait and enter immediately
+    log.info(f"[{mid}] 剩余时间不足({remaining:.0f}s)，跳过动量确认直接入场")
     filled = await order_manager.execute(decision)
     if filled:
         _traded_markets.add(market_id)
@@ -466,6 +607,12 @@ async def main_loop() -> None:
             # Clean up expired traded markets
             active_ids = set(markets.keys())
             _traded_markets.difference_update(_traded_markets - active_ids)
+
+            # Clean up pending signals whose market has already expired
+            stale_pending = [m for m in _pending_signals if m not in active_ids]
+            for m in stale_pending:
+                log.debug(f"清理过期挂起信号: {m[:10]}")
+                del _pending_signals[m]
 
             # Evict stale target cache entries (keep only last 10 minutes)
             cache_cutoff = int(time.time()) - 600
