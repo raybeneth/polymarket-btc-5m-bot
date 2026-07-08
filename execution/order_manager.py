@@ -28,6 +28,8 @@ from config import (
     CHAIN_ID,
     FUNDER_ADDRESS,
     SIGNATURE_TYPE,
+    POLYGON_RPC_URL,
+    USDC_CONTRACT_ADDRESS,
     TRADE_SIZE_USD,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
@@ -95,10 +97,12 @@ def _round_to_tick(price: float, tick_size) -> float:
 
 def get_wallet_balance_usdc() -> Optional[float]:
     """
-    Live mode's dashboard balance: the wallet's real USDC balance on Polymarket,
-    not a simulated ledger — paper mode has its own DB-backed balance instead
-    (see execution.risk.RiskState.balance). Polling only, never gates trades;
-    the exchange itself already rejects orders that exceed available funds.
+    Fallback balance source via CLOB's /balance-allowance endpoint. Only used
+    when get_funder_onchain_balance_usdc() can't run (no FUNDER_ADDRESS / RPC
+    failure) — that endpoint resolves the checked address from the L1 signer +
+    SIGNATURE_TYPE via Polymarket's own proxy-derivation logic, not from
+    FUNDER_ADDRESS, so it reports the wrong (often empty) balance whenever
+    PRIVATE_KEY is a delegated trading key rather than the funder's own key.
     """
     try:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
@@ -108,6 +112,47 @@ def get_wallet_balance_usdc() -> Optional[float]:
         return float(raw) / 1_000_000 if raw is not None else None  # USDC = 6 decimals
     except Exception as exc:
         log.warning(f"[实盘] 查询钱包USDC余额失败: {exc}")
+        return None
+
+
+def _encode_balance_of_call(address: str) -> str:
+    """ABI-encodes an ERC20 balanceOf(address) call for eth_call."""
+    selector = "70a08231"
+    padded = address.lower().removeprefix("0x").rjust(64, "0")
+    return "0x" + selector + padded
+
+
+async def get_funder_onchain_balance_usdc(session: aiohttp.ClientSession) -> Optional[float]:
+    """
+    Live mode's dashboard balance: FUNDER_ADDRESS's real USDC.e balance, read
+    directly on-chain via a Polygon RPC eth_call — this is what
+    polymarket.com's UI shows, and unlike get_wallet_balance_usdc() it doesn't
+    depend on the CLOB backend correctly deriving the funder from the signer.
+    Paper mode has its own DB-backed balance instead (execution.risk.RiskState.balance).
+    """
+    if not FUNDER_ADDRESS:
+        return None
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [
+            {"to": USDC_CONTRACT_ADDRESS, "data": _encode_balance_of_call(FUNDER_ADDRESS)},
+            "latest",
+        ],
+    }
+    try:
+        async with session.post(
+            POLYGON_RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            resp.raise_for_status()
+            body = await resp.json()
+        result = body.get("result")
+        if not result or result == "0x":
+            return None
+        return int(result, 16) / 1_000_000  # USDC = 6 decimals
+    except Exception as exc:
+        log.warning(f"[实盘] 链上查询钱包USDC余额失败: {exc}")
         return None
 
 

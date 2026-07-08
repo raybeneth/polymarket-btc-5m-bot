@@ -581,7 +581,9 @@ async def main_loop() -> None:
                 # loops / 30s). Paper mode never touches this; its balance is
                 # the DB-backed RiskState.balance, updated inline on open/close.
                 if not PAPER_TRADING and loop_count % 15 == 1:
-                    _wallet_balance = await loop.run_in_executor(None, order_manager.get_wallet_balance_usdc)
+                    _wallet_balance = await order_manager.get_funder_onchain_balance_usdc(session)
+                    if _wallet_balance is None:
+                        _wallet_balance = await loop.run_in_executor(None, order_manager.get_wallet_balance_usdc)
                 # Periodic on-chain reconciliation (live mode only) — catches desync
                 # from partial fills, crashes mid-order, or unconfirmed sells that
                 # this loop's own bookkeeping can't detect on its own.

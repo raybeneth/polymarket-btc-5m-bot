@@ -1295,7 +1295,10 @@ let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
 let _pnlRange = 'ALL';
-let _accountBalance = 10000;  // overwritten by the first render()'s d.account_balance
+let _accountBalance = 0;      // overwritten by the first successful d.account_balance
+let _balanceLoaded = false;   // true once a real (non-null) balance has ever arrived
+let _balanceStale = false;    // true when the latest payload's account_balance was null
+                               // (live-mode wallet query failed) — last known value is kept
 
 const PNL_RANGE_SECONDS = { '1D': 86400, '1W': 7 * 86400, '1M': 30 * 86400, '1Y': 365 * 86400 };
 
@@ -1377,6 +1380,16 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
   const balEl = $('pnlBalance'), subEl = $('pnlSub');
   if (!balEl || !subEl) return;
 
+  // No real wallet balance has ever arrived yet (e.g. live-mode on-chain
+  // query hasn't completed its first poll) — show a neutral placeholder
+  // instead of a misleading $0.00 or a stale hardcoded figure.
+  if (!_balanceLoaded && hoverValue == null) {
+    balEl.textContent = '--';
+    balEl.className = 'pnl-balance neutral';
+    subEl.textContent = '等待钱包余额加载...';
+    return;
+  }
+
   if (hoverValue != null) {
     balEl.textContent = '$' + hoverValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     balEl.className = 'pnl-balance ' + (hoverValue >= _accountBalance ? 'positive' : 'negative');
@@ -1389,6 +1402,14 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
   const total = _accountBalance + latestPnl;
   balEl.textContent = '$' + total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   balEl.className = 'pnl-balance ' + (latestPnl >= 0 ? 'positive' : 'negative');
+
+  // Latest poll failed to fetch a real balance (live mode only) — the number
+  // shown above is the last known-good value, not a live one. Say so instead
+  // of silently looking current.
+  if (_balanceStale) {
+    subEl.innerHTML = '<span class="negative">⚠ 钱包余额获取失败，当前为上次已知值</span>';
+    return;
+  }
 
   // Sub-line: net change over the selected range, same as before — this is
   // what the range tabs actually affect now that the headline is a constant
@@ -1454,9 +1475,18 @@ function applyPnlRange(range) {
 }
 
 function updatePnlChart(series, accountBalance) {
-  if (accountBalance != null && accountBalance !== _accountBalance) {
-    _accountBalance = accountBalance;
-    if (_pnlSeries) _pnlSeries.applyOptions({ baseValue: { type: 'price', price: _accountBalance } });
+  if (accountBalance != null) {
+    _balanceLoaded = true;
+    _balanceStale = false;
+    if (accountBalance !== _accountBalance) {
+      _accountBalance = accountBalance;
+      if (_pnlSeries) _pnlSeries.applyOptions({ baseValue: { type: 'price', price: _accountBalance } });
+    }
+  } else {
+    // Backend sent no balance this poll — live-mode wallet query failed (or
+    // hasn't run yet). Keep the last known _accountBalance rather than
+    // resetting it, but flag it so the headline can say so.
+    _balanceStale = _balanceLoaded;
   }
   if (!_pnlChart) initPnlChart();
   _pnlFullSeries = series || [];
