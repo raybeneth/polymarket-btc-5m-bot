@@ -5,8 +5,9 @@ services:
     image: mysql:8.4.10
     container_name: mysql
     restart: always
+    env_file: .env
     environment:
-      MYSQL_ROOT_PASSWORD: mysql_jpdBm6
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
@@ -26,24 +27,6 @@ services:
     ports:
       - "8080:8080"
     env_file: .env
-    environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_PASSWORD: mysql_jpdBm6
-      MYSQL_DATABASE: polymarket_bot
-      PRIVATE_KEY: 0xc9e156d6011b5bfd305c1bea8c0d4d082e7425b2043ed8662728068aa93acceb
-      CLOB_API_KEY: 8f3b4235-6f37-d97c-6210-326bdaf20451
-      CLOB_API_SECRET: FriNNfTt1Z2h6ygrnAW9x9DtSpM8IDd-aqbmvmSGx0g=
-      CLOB_API_PASSPHRASE: c69fba8de75f0ef1622b31ecf1b12b82d74a52e232a9842866f05138c3563be1
-      PAPER_TRADING: true
-      TRADE_SIZE_USD: 1000.0
-      ACCOUNT_BALANCE_USD: 10000.0
-      STOP_LOSS_ENABLED: true
-      PROXY_ENABLED: false
-      MIN_TIMING_FILTER_SCORE_ENABLED: false
-      LOG_LEVEL: INFO
-      BTC_PRICE_SOURCE: okx
     volumes:
       - ./data:/data
     networks:
