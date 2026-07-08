@@ -29,7 +29,7 @@ from config import (
     FUNDER_ADDRESS,
     SIGNATURE_TYPE,
     POLYGON_RPC_URL,
-    USDC_CONTRACT_ADDRESS,
+    PUSD_CONTRACT_ADDRESS,
     TRADE_SIZE_USD,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
@@ -130,7 +130,7 @@ async def _fetch_funder_onchain_balance(session: aiohttp.ClientSession) -> Optio
         "id": 1,
         "method": "eth_call",
         "params": [
-            {"to": USDC_CONTRACT_ADDRESS, "data": _encode_balance_of_call(FUNDER_ADDRESS)},
+            {"to": PUSD_CONTRACT_ADDRESS, "data": _encode_balance_of_call(FUNDER_ADDRESS)},
             "latest",
         ],
     }
@@ -151,10 +151,11 @@ async def _fetch_funder_onchain_balance(session: aiohttp.ClientSession) -> Optio
 
 async def get_funder_onchain_balance_usdc(session: Optional[aiohttp.ClientSession] = None) -> Optional[float]:
     """
-    Live mode's real balance: FUNDER_ADDRESS's actual USDC.e balance, read
-    directly on-chain via a Polygon RPC eth_call — this is what
-    polymarket.com's UI shows, and unlike get_wallet_balance_usdc() it doesn't
-    depend on the CLOB backend correctly deriving the funder from the signer.
+    Live mode's real balance: FUNDER_ADDRESS's actual pUSD balance (Polymarket's
+    collateral token since the April 2026 CLOB V2 upgrade), read directly
+    on-chain via a Polygon RPC eth_call — this is what polymarket.com's UI
+    shows, and unlike get_wallet_balance_usdc() it doesn't depend on the CLOB
+    backend correctly deriving the funder from the signer.
     Used both for the dashboard (main loop passes its long-lived `session`)
     and as the pre-trade sufficient-funds gate in _live_execute() (no session
     to hand in there, so one is created just for this call).

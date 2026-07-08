@@ -40,9 +40,12 @@ SIGNATURE_TYPE: int = int(os.getenv("SIGNATURE_TYPE", "2" if FUNDER_ADDRESS else
 # rather than the funder account's own key, that derivation lands on a
 # different, unrelated (empty) address and silently reports balance=0.
 POLYGON_RPC_URL: str = os.getenv("POLYGON_RPC_URL", "https://polygon-bor.publicnode.com")
-USDC_CONTRACT_ADDRESS: str = os.getenv(
-    "USDC_CONTRACT_ADDRESS", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-)  # USDC.e (bridged) — the collateral token Polymarket uses on Polygon
+# Polymarket's April 28 2026 "CLOB V2" upgrade replaced USDC.e with pUSD as the
+# collateral token traders actually hold — FUNDER_ADDRESS's pUSD balance is
+# what polymarket.com's UI shows now, not its USDC.e balance.
+PUSD_CONTRACT_ADDRESS: str = os.getenv(
+    "PUSD_CONTRACT_ADDRESS", "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+)  # pUSD — Polymarket's collateral token since the April 2026 CLOB V2 upgrade
 
 
 # ──────────────────────────────────────────────
