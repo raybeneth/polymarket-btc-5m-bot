@@ -3,7 +3,8 @@ Order manager — places and tracks limit orders on Polymarket CLOB.
 
 Two modes:
   PAPER_TRADING=true  → logs trade intent, simulates fill at entry price
-  PAPER_TRADING=false → submits real order via py-clob-client
+  PAPER_TRADING=false → submits real order via py-clob-client-v2 (Polymarket
+                        CLOB V2, live since the 2026-04-28 exchange upgrade)
 
 Order strategy:
   - Limit order at best_ask + ORDER_PRICE_SLIPPAGE (small buffer to improve fill chance)
@@ -56,8 +57,7 @@ _clob_client = None
 def _get_clob_client():
     global _clob_client
     if _clob_client is None:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client_v2 import ClobClient, ApiCreds, SignatureTypeV2
         creds = ApiCreds(
             api_key=API_KEY,
             api_secret=API_SECRET,
@@ -68,7 +68,7 @@ def _get_clob_client():
             chain_id=CHAIN_ID,
             key=PRIVATE_KEY,
             creds=creds,
-            signature_type=SIGNATURE_TYPE,
+            signature_type=SignatureTypeV2(SIGNATURE_TYPE),
             funder=FUNDER_ADDRESS or None,
         )
     return _clob_client
@@ -105,7 +105,7 @@ def get_wallet_balance_usdc() -> Optional[float]:
     PRIVATE_KEY is a delegated trading key rather than the funder's own key.
     """
     try:
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        from py_clob_client_v2 import BalanceAllowanceParams, AssetType
         client = _get_clob_client()
         resp = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
         raw = resp.get("balance") if isinstance(resp, dict) else None
@@ -308,16 +308,20 @@ async def _live_execute(decision: TradeDecision) -> bool:
     )
 
     try:
-        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client_v2 import OrderArgs, OrderType, Side, OrderPayload, PartialCreateOrderOptions
         order_args = OrderArgs(
             token_id=decision.token_id,
             price=limit_price,
             size=shares,
-            side="BUY",
+            side=Side.BUY,
         )
         response = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: client.create_and_post_order(order_args),
+            lambda: client.create_and_post_order(
+                order_args=order_args,
+                options=PartialCreateOrderOptions(tick_size=decision.tick_size or "0.01"),
+                order_type=OrderType.GTC,
+            ),
         )
     except Exception as exc:
         log.error(f"[实盘] 订单提交失败: {exc}")
@@ -330,7 +334,9 @@ async def _live_execute(decision: TradeDecision) -> bool:
     fill_price, filled_shares = await _wait_for_fill(client, order_id, limit_price, shares)
     if filled_shares <= 0:
         log.warning(f"[实盘] 订单 {order_id} 在 {ORDER_FILL_TIMEOUT_SECONDS}s 内未成交 — 正在撤单")
-        await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(order_id))
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: client.cancel_order(OrderPayload(orderID=order_id))
+        )
         return False
 
     if filled_shares < shares - 1e-6:
@@ -338,7 +344,9 @@ async def _live_execute(decision: TradeDecision) -> bool:
             f"[实盘] 订单 {order_id} 仅部分成交: {filled_shares:.2f}/{shares:.2f} 份 — "
             f"撤销剩余未成交部分，按实际成交量建仓"
         )
-        await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(order_id))
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: client.cancel_order(OrderPayload(orderID=order_id))
+        )
 
     # Cost basis reflects what actually filled, not the originally requested
     # size — a partial fill should not be booked/risk-tracked as a full position.
@@ -462,15 +470,20 @@ async def _submit_exit(state, pos, exit_reason: str, best_bid: float) -> None:
     track it in _pending_exits until the fill is confirmed by _poll_pending_exits."""
     try:
         client = _get_clob_client()
-        from py_clob_client.clob_types import OrderArgs
+        from py_clob_client_v2 import OrderArgs, OrderType, Side, PartialCreateOrderOptions
         sell_args = OrderArgs(
             token_id=pos.token_id,
             price=round(best_bid, 4),
             size=round(pos.shares, 2),
-            side="SELL",
+            side=Side.SELL,
         )
         response = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: client.create_and_post_order(sell_args),
+            None,
+            lambda: client.create_and_post_order(
+                order_args=sell_args,
+                options=PartialCreateOrderOptions(tick_size="0.01"),
+                order_type=OrderType.GTC,
+            ),
         )
         sell_order_id = response.get("orderID") or response.get("id", "unknown")
         _pending_exits[pos.order_id] = {
@@ -538,7 +551,10 @@ async def _poll_pending_exits(state) -> None:
             del _pending_exits[key]
         elif time.time() - info["submitted_at"] > ORDER_FILL_TIMEOUT_SECONDS * 3:
             log.warning(f"[实盘] 卖单 {sell_order_id} 长时间未成交，撤单后下轮重试")
-            await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(sell_order_id))
+            from py_clob_client_v2 import OrderPayload
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: client.cancel_order(OrderPayload(orderID=sell_order_id))
+            )
             del _pending_exits[key]
 
 

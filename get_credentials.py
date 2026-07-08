@@ -24,7 +24,7 @@ Polymarket CLOB 使用两层认证：
 ─────────────────────────────────────────
 使用方式
 ─────────────────────────────────────────
-  pip install py-clob-client python-dotenv
+  pip install py-clob-client-v2 python-dotenv
   python get_credentials.py
 
   输入你的钱包私钥（不会联网发送，仅本地签名），
@@ -42,10 +42,10 @@ import sys
 def main() -> None:
     # ── 检查依赖 ──────────────────────────────────────────────────────
     try:
-        from py_clob_client.client import ClobClient
+        from py_clob_client_v2 import ClobClient
     except ImportError:
         print("错误：请先安装依赖")
-        print("  pip install py-clob-client")
+        print("  pip install py-clob-client-v2")
         sys.exit(1)
 
     print()
@@ -77,9 +77,9 @@ def main() -> None:
             key=private_key,
         )
 
-        # derive_api_key：用私钥签名消息，服务器验证后返回 L2 凭证
+        # create_or_derive_api_key：用私钥签名消息，服务器验证后返回 L2 凭证
         # 同一私钥每次调用返回相同的凭证（确定性派生，不会重复创建）
-        creds = client.derive_api_key()
+        creds = client.create_or_derive_api_key()
 
     except Exception as exc:
         print(f"\n错误：{exc}")
