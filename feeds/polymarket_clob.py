@@ -109,6 +109,9 @@ class OrderBook:
     fetched_at: float         # unix timestamp
     bids: list[BookLevel]     # sorted descending (best bid first)
     asks: list[BookLevel]     # sorted ascending  (best ask first)
+    tick_size: Optional[str] = None       # minimum price increment, e.g. "0.01"
+    min_order_size: Optional[float] = None  # minimum tradeable size for this token
+    neg_risk: Optional[bool] = None       # True = shares a negRisk-adapter exchange contract
 
     @property
     def best_bid(self) -> Optional[float]:
@@ -371,11 +374,21 @@ async def fetch_order_book(
     bids = bids[:DEPTH_LEVELS_TO_CHECK]
     asks = asks[:DEPTH_LEVELS_TO_CHECK]
 
+    min_order_size = None
+    if data.get("min_order_size") is not None:
+        try:
+            min_order_size = float(data["min_order_size"])
+        except (TypeError, ValueError):
+            min_order_size = None
+
     return OrderBook(
         token_id=token_id,
         fetched_at=time.time(),
         bids=bids,
         asks=asks,
+        tick_size=data.get("tick_size"),
+        min_order_size=min_order_size,
+        neg_risk=data.get("neg_risk"),
     )
 
 

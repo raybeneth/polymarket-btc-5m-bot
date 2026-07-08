@@ -195,7 +195,7 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade (HIGH tier = 100%)
 TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
-MAX_DAILY_LOSS_USD: float = 10000.0       # halt if daily P&L < -$10
+MAX_DAILY_LOSS_USD: float = float(os.getenv("MAX_DAILY_LOSS_USD", "10000.0"))  # halt if daily P&L drops below -this
 
 # Starting account balance for the dashboard's Profit/Loss widget — displayed
 # balance/curve is this plus cumulative P&L, not raw P&L from zero. Purely a
@@ -318,6 +318,11 @@ class TradeDecision:
     market_end_ts: float = 0.0  # market resolution time (unix s), for settlement
     trade_size_usd: float = 0.0  # dynamic size based on confidence tier (0 = use default TRADE_SIZE_USD)
     skip_reason: Optional[str] = None
+    # Real market metadata carried from the order book response (see feeds/polymarket_clob.py
+    # OrderBook), used by live execution to round to a valid tick and skip unsupported markets.
+    tick_size: Optional[str] = None
+    min_order_size: float = 0.0
+    neg_risk: bool = False
 
     def __str__(self) -> str:
         if self.should_trade:

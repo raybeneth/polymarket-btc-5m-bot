@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import Optional
 
+import aiohttp
+
 from config import (
     PAPER_TRADING,
     PRIVATE_KEY,
@@ -64,6 +66,27 @@ def _get_clob_client():
             creds=creds,
         )
     return _clob_client
+
+
+def _round_to_tick(price: float, tick_size) -> float:
+    """
+    Round a price to the nearest valid increment for this market's tick size
+    (e.g. "0.01" or "0.001"), as read from the live order book — Polymarket
+    rejects any order whose price doesn't sit on that grid, and different
+    markets use different tick sizes, so a blind round(x, 4) can silently
+    produce an invalid price.
+    """
+    tick_str = str(tick_size) if tick_size else "0.01"
+    try:
+        tick = float(tick_str)
+    except (TypeError, ValueError):
+        tick = 0.01
+        tick_str = "0.01"
+    if tick <= 0:
+        tick, tick_str = 0.01, "0.01"
+    decimals = len(tick_str.split(".")[-1]) if "." in tick_str else 0
+    rounded = round(round(price / tick) * tick, decimals)
+    return min(max(rounded, tick), 1 - tick)
 
 
 def get_wallet_balance_usdc() -> Optional[float]:
@@ -168,23 +191,57 @@ async def _paper_execute(decision: TradeDecision) -> bool:
 
 async def _live_execute(decision: TradeDecision) -> bool:
     """Place a real limit order on Polymarket CLOB."""
+    # negRisk markets use a different exchange contract; this bot's live path
+    # has never been exercised against one, so refuse rather than assume it
+    # works. BTC 5-min Up/Down markets are plain binary markets and should
+    # always read neg_risk=False — this is a safety net, not expected to fire.
+    if decision.neg_risk:
+        log.warning(
+            f"[实盘] 跳过: 市场为 negRisk 合约(neg_risk=True)，实盘下单尚未针对此类型验证 "
+            f"token={decision.token_id[:12]}…"
+        )
+        return False
+
     state = get_state()
-    ok, reason = state.can_trade()
+    # trade_size_usd=0 here deliberately skips can_trade()'s internal balance
+    # check — that check compares against state.balance, which is the paper-
+    # mode simulated ledger and has no meaning in live mode. Concurrent-
+    # position / daily-loss / circuit-breaker gates still apply below.
+    ok, reason = state.can_trade(0)
     if not ok:
         log.warning(f"[实盘] 风控拦截: {reason}")
         return False
 
+    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
+    real_balance = await asyncio.get_event_loop().run_in_executor(None, get_wallet_balance_usdc)
+    if real_balance is None:
+        log.warning("[实盘] 无法查询钱包USDC余额，为安全起见跳过本次下单")
+        return False
+    if real_balance < actual_size:
+        log.warning(f"[实盘] 钱包USDC余额不足: 现有{real_balance:.2f} < 需要{actual_size:.2f}")
+        return False
+
     client = _get_clob_client()
-    limit_price = round(decision.entry_price + ORDER_PRICE_SLIPPAGE, 4)
+    # Round to the market's real tick size (from the order book response) instead
+    # of a blind 4-decimal round — Polymarket rejects prices off the tick grid,
+    # and tick size varies by market (see feeds/polymarket_clob.py OrderBook).
+    limit_price = _round_to_tick(decision.entry_price + ORDER_PRICE_SLIPPAGE, decision.tick_size)
 
     # Calculate shares from USD budget (dynamic size from confidence tier)
-    actual_size = decision.trade_size_usd or TRADE_SIZE_USD
     shares = round(actual_size / limit_price, 2)
+
+    min_size = decision.min_order_size or 0.0
+    if min_size > 0 and shares < min_size:
+        log.warning(
+            f"[实盘] 跳过: 下单量 {shares:.2f} 低于该市场最小下单量 {min_size:.2f}"
+        )
+        return False
 
     log.info(
         f"[实盘] 提交买单 {decision.side} | "
         f"代币={decision.token_id[:12]}… | "
-        f"限价={limit_price:.4f} | 数量={shares:.2f} | ${actual_size:.2f}"
+        f"限价={limit_price:.4f}(tick={decision.tick_size or '0.01'}) | "
+        f"数量={shares:.2f} | ${actual_size:.2f}"
     )
 
     try:
@@ -206,31 +263,42 @@ async def _live_execute(decision: TradeDecision) -> bool:
     order_id = response.get("orderID") or response.get("id", "unknown")
     log.info(f"[实盘] 订单已提交: {order_id}")
 
-    # Poll for fill or timeout
-    filled_price = await _wait_for_fill(client, order_id, limit_price)
-    if filled_price is None:
+    # Poll for fill/partial-fill or timeout
+    fill_price, filled_shares = await _wait_for_fill(client, order_id, limit_price, shares)
+    if filled_shares <= 0:
         log.warning(f"[实盘] 订单 {order_id} 在 {ORDER_FILL_TIMEOUT_SECONDS}s 内未成交 — 正在撤单")
         await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(order_id))
         return False
 
+    if filled_shares < shares - 1e-6:
+        log.warning(
+            f"[实盘] 订单 {order_id} 仅部分成交: {filled_shares:.2f}/{shares:.2f} 份 — "
+            f"撤销剩余未成交部分，按实际成交量建仓"
+        )
+        await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(order_id))
+
+    # Cost basis reflects what actually filled, not the originally requested
+    # size — a partial fill should not be booked/risk-tracked as a full position.
+    actual_cost = filled_shares * fill_price
     pos = OpenPosition(
         market_id=decision.market_id,
         token_id=decision.token_id,
         side=decision.side,
-        entry_price=filled_price,
-        shares=shares,
+        entry_price=fill_price,
+        shares=filled_shares,
         opened_at=time.time(),
         order_id=order_id,
         market_end_ts=decision.market_end_ts,
+        usd_size=actual_cost,
     )
     state.record_open(pos)
 
     side_icon = "^" if decision.side == "YES" else "v"
-    stop_target = filled_price - filled_price * STOP_LOSS_RATIO
-    tp_target = filled_price + TAKE_PROFIT_DELTA
+    stop_target = fill_price - fill_price * STOP_LOSS_RATIO
+    tp_target = fill_price + TAKE_PROFIT_DELTA
     log.info(
-        f"OPEN {side_icon} {decision.side} @ {filled_price:.3f} "
-        f"qty={shares:.2f} ${actual_size:.2f} "
+        f"OPEN {side_icon} {decision.side} @ {fill_price:.3f} "
+        f"qty={filled_shares:.2f} ${actual_cost:.2f} "
         f"score={decision.combined_score:.1f} "
         f"止损Target={stop_target:.3f} 止盈Target={tp_target:.3f} {order_id}"
     )
@@ -238,7 +306,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
     await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: db.insert_open(
-            pos, "live", actual_size, decision.combined_score,
+            pos, "live", actual_cost, decision.combined_score,
             {k: v.score for k, v in decision.filter_results.items()},
         ),
     )
@@ -248,9 +316,9 @@ async def _live_execute(decision: TradeDecision) -> bool:
         "market_id": decision.market_id,
         "side": decision.side,
         "token_id": decision.token_id,
-        "entry_price": filled_price,
-        "shares": shares,
-        "usd_size": actual_size,
+        "entry_price": fill_price,
+        "shares": filled_shares,
+        "usd_size": actual_cost,
         "combined_score": decision.combined_score,
         "filter_scores": {k: v.score for k, v in decision.filter_results.items()},
         "timestamp": time.time(),
@@ -259,28 +327,51 @@ async def _live_execute(decision: TradeDecision) -> bool:
         order_id=order_id,
         market_id=decision.market_id,
         side=decision.side,
-        entry_price=filled_price,
-        shares=shares,
+        entry_price=fill_price,
+        shares=filled_shares,
         score=decision.combined_score,
         mode="实盘",
     )
     return True
 
 
-async def _wait_for_fill(client, order_id: str, limit_price: float) -> Optional[float]:
-    """Poll order status until filled or timeout. Returns fill price or None."""
+async def _wait_for_fill(
+    client, order_id: str, limit_price: float, requested_size: float
+) -> tuple[Optional[float], float]:
+    """
+    Poll order status until filled, partially filled, dead, or timeout.
+
+    Returns (fill_price, filled_size):
+      - filled_size == 0            → nothing matched (fill_price is None)
+      - 0 < filled_size < requested  → partial fill; caller cancels the rest
+      - filled_size >= requested     → fully matched
+
+    The CLOB's own status strings are lowercase ("matched"/"live"/"delayed"/
+    "unmatched"/"cancelled") — this used to compare against "MATCHED" (upper-
+    case), which never matched, so every live fill was silently treated as a
+    timeout and the (possibly already-filled) order was cancelled afterwards.
+    """
     deadline = time.time() + ORDER_FILL_TIMEOUT_SECONDS
+    size_matched = 0.0
+    fill_price = limit_price
     while time.time() < deadline:
         try:
             status = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: client.get_order(order_id)
             )
-            if status.get("status") == "MATCHED":
-                return float(status.get("price", limit_price))
+            status_val = str(status.get("status", "")).lower()
+            size_matched = float(status.get("size_matched", 0) or 0)
+            fill_price = float(status.get("price", limit_price) or limit_price)
+            if status_val == "matched" or size_matched >= requested_size - 1e-6:
+                return fill_price, min(size_matched, requested_size)
+            if status_val in ("unmatched", "cancelled", "canceled"):
+                return (fill_price, size_matched) if size_matched > 0 else (None, 0.0)
         except Exception:
             pass
         await asyncio.sleep(1.0)
-    return None
+    # Timed out still "live" on the book — report whatever matched so far;
+    # caller cancels the unfilled remainder.
+    return (fill_price, size_matched) if size_matched > 0 else (None, 0.0)
 
 
 # ─────────────────────────────────────────────
@@ -292,6 +383,100 @@ async def execute(decision: TradeDecision) -> bool:
     if PAPER_TRADING:
         return await _paper_execute(decision)
     return await _live_execute(decision)
+
+
+# Live-mode exits in flight: pos.order_id -> {pos, sell_order_id, exit_reason,
+# submitted_at}. A position stays in state.open_positions (i.e. still counted
+# as real risk) until its SELL order is confirmed matched — closing it out
+# the instant we submit the order would desync our book from the exchange
+# the moment a sell fails to fill (illiquid market, price moved, etc.),
+# leaving us thinking we're flat while still holding real shares.
+_pending_exits: dict = {}
+
+
+async def _submit_exit(state, pos, exit_reason: str, best_bid: float) -> None:
+    """Submit a SELL order for a live position that hit an exit trigger and
+    track it in _pending_exits until the fill is confirmed by _poll_pending_exits."""
+    try:
+        client = _get_clob_client()
+        from py_clob_client.clob_types import OrderArgs
+        sell_args = OrderArgs(
+            token_id=pos.token_id,
+            price=round(best_bid, 4),
+            size=round(pos.shares, 2),
+            side="SELL",
+        )
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: client.create_and_post_order(sell_args),
+        )
+        sell_order_id = response.get("orderID") or response.get("id", "unknown")
+        _pending_exits[pos.order_id] = {
+            "pos": pos,
+            "sell_order_id": sell_order_id,
+            "exit_reason": exit_reason,
+            "submitted_at": time.time(),
+        }
+        log.info(f"[实盘] {exit_reason} 卖单已提交 {pos.order_id} -> {sell_order_id} @ {best_bid:.3f}")
+    except Exception as exc:
+        log.warning(f"[实盘] {exit_reason} 卖出提交失败 {pos.order_id}: {exc}")
+
+
+async def _poll_pending_exits(state) -> None:
+    """Check in-flight exit sell orders; only record_close/db.close_position
+    once the exchange confirms the sell actually matched."""
+    if not _pending_exits:
+        return
+    client = _get_clob_client()
+    for key, info in list(_pending_exits.items()):
+        pos = info["pos"]
+        sell_order_id = info["sell_order_id"]
+        exit_reason = info["exit_reason"]
+        try:
+            status = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: client.get_order(sell_order_id)
+            )
+            status_val = str(status.get("status", "")).lower()
+            size_matched = float(status.get("size_matched", 0) or 0)
+            fill_price = float(status.get("price", 0) or 0)
+        except Exception as exc:
+            log.warning(f"[实盘] 查询卖单状态失败 {sell_order_id}: {exc}")
+            continue
+
+        if status_val == "matched" or size_matched >= pos.shares - 1e-6:
+            exit_price = fill_price if fill_price > 0 else pos.entry_price
+            pnl = state.record_close(pos.market_id, exit_price)
+            hold_time = int(time.time() - pos.opened_at)
+            log.info(
+                f"EXIT {exit_reason} {pos.side} "
+                f"{pos.entry_price:.3f}->{exit_price:.3f} "
+                f"pnl={pnl:+.2f} hold={hold_time}s {pos.order_id}"
+            )
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: db.close_position(pos.order_id, exit_price, exit_reason)
+            )
+            result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
+            log_position_close(
+                order_id=pos.order_id,
+                market_id=pos.market_id,
+                side=pos.side,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                shares=pos.shares,
+                pnl=pnl if pnl is not None else 0.0,
+                result=f"{result_str}({exit_reason})",
+                mode="实盘",
+            )
+            del _pending_exits[key]
+        elif status_val in ("unmatched", "cancelled", "canceled"):
+            log.warning(
+                f"[实盘] {exit_reason} 卖单未成交/被取消 {sell_order_id} — "
+                f"仓位 {pos.order_id} 仍持有，下轮重新尝试平仓"
+            )
+            del _pending_exits[key]
+        elif time.time() - info["submitted_at"] > ORDER_FILL_TIMEOUT_SECONDS * 3:
+            log.warning(f"[实盘] 卖单 {sell_order_id} 长时间未成交，撤单后下轮重试")
+            await asyncio.get_event_loop().run_in_executor(None, lambda: client.cancel(sell_order_id))
+            del _pending_exits[key]
 
 
 async def check_early_exits(session) -> None:
@@ -306,10 +491,16 @@ async def check_early_exits(session) -> None:
     from feeds.polymarket_clob import fetch_order_book
 
     state = get_state()
+
+    if not PAPER_TRADING:
+        await _poll_pending_exits(state)
+
     if not state.open_positions:
         return
 
     for pos in list(state.open_positions):
+        if not PAPER_TRADING and pos.order_id in _pending_exits:
+            continue  # sell already submitted for this position, awaiting fill confirmation
         book = await fetch_order_book(session, pos.token_id)
         if book is None or book.best_bid is None:
             continue
@@ -372,41 +563,81 @@ async def check_early_exits(session) -> None:
                 mode="模拟",
             )
         else:
-            try:
-                client = _get_clob_client()
-                from py_clob_client.clob_types import OrderArgs
-                sell_args = OrderArgs(
-                    token_id=pos.token_id,
-                    price=round(best_bid, 4),
-                    size=round(pos.shares, 2),
-                    side="SELL",
-                )
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: client.create_and_post_order(sell_args),
-                )
-                pnl = state.record_close(pos.market_id, exit_price)
-                log.info(
-                    f"[实盘] {exit_reason} 触发 | {pos.order_id} | "
-                    f"卖出 @ {exit_price:.3f} 盈亏={pnl:+.4f}"
-                )
-                await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: db.close_position(pos.order_id, exit_price, exit_reason)
-                )
-                result_str = "WIN" if (pnl and pnl > 0) else "LOSS"
-                log_position_close(
-                    order_id=pos.order_id,
-                    market_id=pos.market_id,
-                    side=pos.side,
-                    entry_price=pos.entry_price,
-                    exit_price=exit_price,
-                    shares=pos.shares,
-                    pnl=pnl if pnl is not None else 0.0,
-                    result=f"{result_str}({exit_reason})",
-                    mode="实盘",
-                )
-            except Exception as exc:
-                log.warning(f"[实盘] {exit_reason} 卖出失败 {pos.order_id}: {exc}")
+            await _submit_exit(state, pos, exit_reason, best_bid)
+
+
+async def reconcile_positions(session: aiohttp.ClientSession) -> None:
+    """
+    Compare our internal open-position book (DB + RiskState) against actual
+    on-chain holdings via Polymarket's public Data API. Nothing else in this
+    bot catches desync: a partial fill, a sell that _pending_exits thinks is
+    still live but actually got cancelled by Polymarket, or a crash between
+    order submission and DB write would otherwise go unnoticed indefinitely.
+    Live mode only — paper mode has no on-chain positions to compare against.
+    """
+    if PAPER_TRADING:
+        return
+
+    try:
+        client = _get_clob_client()
+        wallet = await asyncio.get_event_loop().run_in_executor(None, client.get_address)
+    except Exception as exc:
+        log.warning(f"[对账] 无法获取钱包地址: {exc}")
+        return
+
+    try:
+        async with session.get(
+            "https://data-api.polymarket.com/positions",
+            params={"user": wallet},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            resp.raise_for_status()
+            onchain = await resp.json()
+    except Exception as exc:
+        log.warning(f"[对账] 查询链上持仓失败: {exc}")
+        return
+
+    onchain_by_token: dict[str, float] = {}
+    for p in onchain if isinstance(onchain, list) else []:
+        token = p.get("asset")
+        if not token:
+            continue
+        try:
+            size = float(p.get("size", 0) or 0)
+        except (TypeError, ValueError):
+            size = 0.0
+        if size > 1e-6:
+            onchain_by_token[token] = onchain_by_token.get(token, 0.0) + size
+
+    state = get_state()
+    tracked_by_token = {pos.token_id: pos for pos in state.open_positions}
+
+    mismatches = 0
+    for token, onchain_size in onchain_by_token.items():
+        tracked = tracked_by_token.get(token)
+        if tracked is None:
+            mismatches += 1
+            log.warning(
+                f"[对账] 发现未跟踪的链上持仓: token={token[:12]}… "
+                f"size={onchain_size:.2f} — 本地DB/state中无对应记录"
+            )
+        elif abs(tracked.shares - onchain_size) > 0.5:
+            mismatches += 1
+            log.warning(
+                f"[对账] 持仓数量不一致 {tracked.order_id}: "
+                f"本地记录={tracked.shares:.2f} 链上实际={onchain_size:.2f}"
+            )
+
+    for token, pos in tracked_by_token.items():
+        if token not in onchain_by_token:
+            mismatches += 1
+            log.warning(
+                f"[对账] 本地记录持仓 {pos.order_id} (token={token[:12]}…) "
+                f"但链上未查到对应余额 — 可能已平仓但本地未同步，或订单从未真正成交"
+            )
+
+    if mismatches == 0 and (onchain_by_token or tracked_by_token):
+        log.info(f"[对账] 本地持仓与链上一致 ({len(tracked_by_token)} 个仓位)")
 
 
 async def resolve_expired_positions() -> None:

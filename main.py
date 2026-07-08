@@ -193,6 +193,9 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
             return
 
         pending_decision.entry_price = current_price
+        pending_decision.tick_size = book2.tick_size
+        pending_decision.min_order_size = book2.min_order_size or 0.0
+        pending_decision.neg_risk = bool(book2.neg_risk)
         entry_reason = f"超时{waited:.0f}s" if force_enter else mom_reason
         log.info(
             f"[{mid}] 动量确认入场 ({waited:.0f}s | {entry_reason}): "
@@ -353,6 +356,8 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         entry_price=entry_price, combined_score=combined_score,
         filter_results=filter_results, market_end_ts=market.end_timestamp,
         trade_size_usd=trade_size,
+        tick_size=book.tick_size, min_order_size=book.min_order_size or 0.0,
+        neg_risk=bool(book.neg_risk),
     )
 
     payout = 1.0 / entry_price if entry_price > 0 else 0
@@ -543,6 +548,8 @@ async def main_loop() -> None:
     await btc_price.start_feed()
 
     async with create_session() as session:
+        if not PAPER_TRADING:
+            await order_manager.reconcile_positions(session)
         asyncio.create_task(run_scanner(session), name="market_scanner")
         await asyncio.sleep(3.0)
         log.info("主循环已启动")
@@ -574,6 +581,11 @@ async def main_loop() -> None:
                 # the DB-backed RiskState.balance, updated inline on open/close.
                 if not PAPER_TRADING and loop_count % 15 == 1:
                     _wallet_balance = await loop.run_in_executor(None, order_manager.get_wallet_balance_usdc)
+                # Periodic on-chain reconciliation (live mode only) — catches desync
+                # from partial fills, crashes mid-order, or unconfirmed sells that
+                # this loop's own bookkeeping can't detect on its own.
+                if not PAPER_TRADING and loop_count % 30 == 1:
+                    await order_manager.reconcile_positions(session)
             except (ConnectionResetError, aiohttp.ClientError, OSError) as exc:
                 log.warning(f"网络异常，跳过本轮循环: {exc}")
 

@@ -15,3 +15,7 @@
 | [007](007-2026-07-02-balanced-entry-consistency-macro-sizing.md) | 2026-07-02 | 方向一致性 + CEX 宏观趋势确认 + 分级仓位（宏观趋势层已于 008 前移除） | ✅ 已实现,部分回退 |
 | [008](008-2026-07-03-tiered-noise-skip-reversal-guard.md) | 2026-07-03 | 噪声门槛收窄(仅<30%硬跳过) + 新增 LOW 档位 + 入场前反转哨兵 + 漏斗可见性统计 | ✅ 已实现,待验证 |
 | [009](009-2026-07-03-med-tier-magnitude-floor.md) | 2026-07-03 | MED 档新增方向强度下限(修复"持续噪音"误判为中等信号) | ✅ 已实现,待验证 |
+| [010](010-2026-07-03-restore-direction-hard-floor.md) | 2026-07-03 | 恢复 direction 硬性门槛，堵住"无关分项凑综合分"的漏洞 | ✅ 已实现,待验证 |
+| [011](011-2026-07-06-14loss-postmortem-high-tier-stoploss-slippage.md) | 2026-07-06 | 14连亏事后分析：HIGH tier 方向门槛、止损滑点、反转守卫 | ✅ 已实现 |
+| [012](012-2026-07-07-winrate-4strategies-momentum-entry.md) | 2026-07-07 | 胜率提升四策略：动量入场确认、价差/时机过滤、熔断机制 | ✅ 已实现 |
+| [013](013-2026-07-08-live-trading-readiness-fixes.md) | 2026-07-08 | 实盘交易就绪修复：真实余额检查、tick取整、成交确认对账、小额试跑参数 | ✅ 已实现,待实盘验证 |

@@ -1695,26 +1695,16 @@ $('drawerMenu').addEventListener('click', e => {
   if (item.dataset.action === 'strategy') { closeDrawer(); openInfoModal(); }
 });
 
-// Populate the drawer with one item per optimization record (data-driven).
+// Optimization records are no longer listed in the drawer menu — only the
+// latest one still auto-pops up once per record (per-record localStorage key)
+// as a "what's new" notice.
 async function loadOptimizations() {
   let recs = [];
   try {
     const res = await fetch('/api/optimizations');
     if (res.ok) recs = await res.json();
-  } catch (e) { /* leave menu with just CLICK-ME */ }
-  const menu = $('drawerMenu');
-  recs.forEach(r => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'drawer-item';
-    // Strip the leading "NNN — " from the heading for the subtitle.
-    const sub = r.title.replace(/^\s*\d+\s*[—-]\s*/, '');
-    btn.innerHTML = `<span class="di-title">优化记录${r.num}</span><span class="di-sub">${escHtml(sub)}</span>`;
-    btn.addEventListener('click', () => { closeDrawer(); _autoOpenNum = null; openDoc(`优化记录${r.num}`, r.markdown); });
-    menu.appendChild(btn);
-  });
+  } catch (e) { /* no optimization records available */ }
 
-  // Auto-show the latest optimization record on first visit (per-record localStorage key)
   if (recs.length > 0) {
     const latest = recs[recs.length - 1];
     const dismissed = localStorage.getItem('dismissed_opt_' + latest.num);
