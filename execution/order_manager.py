@@ -122,14 +122,7 @@ def _encode_balance_of_call(address: str) -> str:
     return "0x" + selector + padded
 
 
-async def get_funder_onchain_balance_usdc(session: aiohttp.ClientSession) -> Optional[float]:
-    """
-    Live mode's dashboard balance: FUNDER_ADDRESS's real USDC.e balance, read
-    directly on-chain via a Polygon RPC eth_call — this is what
-    polymarket.com's UI shows, and unlike get_wallet_balance_usdc() it doesn't
-    depend on the CLOB backend correctly deriving the funder from the signer.
-    Paper mode has its own DB-backed balance instead (execution.risk.RiskState.balance).
-    """
+async def _fetch_funder_onchain_balance(session: aiohttp.ClientSession) -> Optional[float]:
     if not FUNDER_ADDRESS:
         return None
     payload = {
@@ -154,6 +147,24 @@ async def get_funder_onchain_balance_usdc(session: aiohttp.ClientSession) -> Opt
     except Exception as exc:
         log.warning(f"[实盘] 链上查询钱包USDC余额失败: {exc}")
         return None
+
+
+async def get_funder_onchain_balance_usdc(session: Optional[aiohttp.ClientSession] = None) -> Optional[float]:
+    """
+    Live mode's real balance: FUNDER_ADDRESS's actual USDC.e balance, read
+    directly on-chain via a Polygon RPC eth_call — this is what
+    polymarket.com's UI shows, and unlike get_wallet_balance_usdc() it doesn't
+    depend on the CLOB backend correctly deriving the funder from the signer.
+    Used both for the dashboard (main loop passes its long-lived `session`)
+    and as the pre-trade sufficient-funds gate in _live_execute() (no session
+    to hand in there, so one is created just for this call).
+    Paper mode has its own DB-backed balance instead (execution.risk.RiskState.balance).
+    """
+    if session is not None:
+        return await _fetch_funder_onchain_balance(session)
+    from feeds.polymarket_clob import create_session
+    async with create_session() as owned_session:
+        return await _fetch_funder_onchain_balance(owned_session)
 
 
 # ─────────────────────────────────────────────
@@ -262,7 +273,9 @@ async def _live_execute(decision: TradeDecision) -> bool:
         return False
 
     actual_size = decision.trade_size_usd or TRADE_SIZE_USD
-    real_balance = await asyncio.get_event_loop().run_in_executor(None, get_wallet_balance_usdc)
+    real_balance = await get_funder_onchain_balance_usdc()
+    if real_balance is None:
+        real_balance = await asyncio.get_event_loop().run_in_executor(None, get_wallet_balance_usdc)
     if real_balance is None:
         log.warning("[实盘] 无法查询钱包USDC余额，为安全起见跳过本次下单")
         return False

@@ -39,7 +39,7 @@ SIGNATURE_TYPE: int = int(os.getenv("SIGNATURE_TYPE", "2" if FUNDER_ADDRESS else
 # FUNDER_ADDRESS — in bot setups where PRIVATE_KEY is a delegated trading key
 # rather than the funder account's own key, that derivation lands on a
 # different, unrelated (empty) address and silently reports balance=0.
-POLYGON_RPC_URL: str = os.getenv("POLYGON_RPC_URL", "https://polygon-rpc.com")
+POLYGON_RPC_URL: str = os.getenv("POLYGON_RPC_URL", "https://polygon-bor.publicnode.com")
 USDC_CONTRACT_ADDRESS: str = os.getenv(
     "USDC_CONTRACT_ADDRESS", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 )  # USDC.e (bridged) — the collateral token Polymarket uses on Polygon
