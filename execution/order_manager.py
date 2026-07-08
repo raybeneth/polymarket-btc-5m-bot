@@ -26,6 +26,8 @@ from config import (
     API_PASSPHRASE,
     POLYMARKET_HOST,
     CHAIN_ID,
+    FUNDER_ADDRESS,
+    SIGNATURE_TYPE,
     TRADE_SIZE_USD,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
@@ -64,6 +66,8 @@ def _get_clob_client():
             chain_id=CHAIN_ID,
             key=PRIVATE_KEY,
             creds=creds,
+            signature_type=SIGNATURE_TYPE,
+            funder=FUNDER_ADDRESS or None,
         )
     return _clob_client
 

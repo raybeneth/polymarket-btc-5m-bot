@@ -457,6 +457,7 @@ def _build_web_state() -> dict:
         "btc_connected": btc_price.is_connected(),
         "btc_history": btc_price.get_chart_series(),
         "btc_target": round(btc_target, 2) if btc_target is not None else None,
+        "paper_trading": PAPER_TRADING,
         "account_balance": state.balance if PAPER_TRADING else _wallet_balance,
         "markets_count": len(get_active_markets()),
         "today": {

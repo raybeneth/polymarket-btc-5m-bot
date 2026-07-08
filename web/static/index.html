@@ -63,6 +63,10 @@
     font-weight: 600;
     text-transform: uppercase;
   }
+  .mode-badge.live {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+  }
   .header-right {
     display: flex;
     align-items: center;
@@ -1520,6 +1524,13 @@ function render(d) {
     ? '$' + d.btc_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '--';
   $('btcDot').className = 'conn-dot ' + (d.btc_connected ? 'on' : 'off');
+
+  // Trading mode
+  const modeEl = $('mode');
+  if (modeEl && d.paper_trading != null) {
+    modeEl.textContent = d.paper_trading ? 'PAPER' : 'LIVE';
+    modeEl.className = 'mode-badge' + (d.paper_trading ? '' : ' live');
+  }
 
   // Uptime
   if (d.uptime != null) {

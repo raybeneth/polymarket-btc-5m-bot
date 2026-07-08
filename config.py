@@ -21,6 +21,17 @@ POLYMARKET_HOST: str = "https://clob.polymarket.com"
 GAMMA_HOST: str = "https://gamma-api.polymarket.com"
 CHAIN_ID: int = 137  # Polygon mainnet
 
+# Polymarket wraps most accounts (browser-wallet connect, email/Magic login)
+# in a proxy contract that actually custodies funds — PRIVATE_KEY only signs
+# on behalf of that proxy, it doesn't hold the USDC itself. If your Polymarket
+# UI wallet address differs from the address derived from PRIVATE_KEY, set
+# FUNDER_ADDRESS to that UI address so balance checks and orders target the
+# right account. SIGNATURE_TYPE: 0 = EOA (funds held directly by PRIVATE_KEY's
+# address, no proxy), 1 = POLY_PROXY (email/Magic-created wallets), 2 =
+# POLY_GNOSIS_SAFE (browser-wallet/MetaMask-created proxy — the common case).
+FUNDER_ADDRESS: str = os.getenv("FUNDER_ADDRESS", "")
+SIGNATURE_TYPE: int = int(os.getenv("SIGNATURE_TYPE", "2" if FUNDER_ADDRESS else "0"))
+
 
 # ──────────────────────────────────────────────
 # OPERATIONAL MODE
