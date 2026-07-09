@@ -8,6 +8,7 @@ venv/
 *.log
 *.jsonl
 positions.log
+docs/
 data/
 .claude/
 # NOTE: docs/optimizations/*.md are served by the dashboard's /api/optimizations

@@ -1516,7 +1516,18 @@ function syncHistoryHeightToChart() {
     historyContainer.style.height = '';   // clear override — CSS's fixed 280px applies
     return;
   }
-  const height = Math.max(80, chartCard.offsetHeight - header.offsetHeight);
+
+  // Measure the chart card's INTRINSIC height from its non-stretching children
+  // (chart-wrap has a fixed CSS height + flex:none), NOT chartCard.offsetHeight.
+  // The card and this history section share a grid row with align-items:stretch,
+  // so reading the card's stretched offsetHeight and then setting the history
+  // container from it forms a feedback loop: any sub-pixel/border overshoot in
+  // the history side grows the row, stretches the card, and each render() tick
+  // (which calls this) ratchets the height up unbounded over hours. Summing the
+  // card's own children makes this measurement stable and idempotent.
+  let intrinsic = 0;
+  for (const child of chartCard.children) intrinsic += child.offsetHeight;
+  const height = Math.max(80, intrinsic - header.offsetHeight);
   historyContainer.style.height = height + 'px';
 }
 

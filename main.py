@@ -634,14 +634,14 @@ async def main_loop() -> None:
             for k in [k for k in _target_cache if k < cache_cutoff]:
                 del _target_cache[k]
 
-            # Periodic funnel visibility: NEUTRAL/noise skips were previously
-            # only log.debug (invisible at LOG_LEVEL=INFO), so trade-frequency
-            # tuning had no idea how big the top of the funnel was.
+            # Periodic funnel stats (NEUTRAL/noise/weak/reversal skips + tier
+            # fills). Kept at log.debug — useful for trade-frequency tuning when
+            # you raise LOG_LEVEL to DEBUG, but too noisy for normal INFO runs.
             now_ts = time.time()
             if now_ts - _last_stats_report >= STATS_REPORT_INTERVAL:
                 stats = direction.get_and_reset_skip_stats()
                 fired = stats["low"] + stats["med"] + stats["high"]
-                log.info(
+                log.debug(
                     f"方向漏斗(近{STATS_REPORT_INTERVAL/60:.0f}分钟): "
                     f"NEUTRAL={stats['neutral']} 噪声跳过={stats['noise_skip']} "
                     f"弱信号跳过={stats['weak_skip']} 反转拦截={stats['reversal_guard']} | "
