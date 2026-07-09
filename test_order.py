@@ -13,58 +13,45 @@ API creds）下一笔「最小金额」的真实订单，用来验证
   - 一旦返回 orderID（下单成功），立即撤单 → 零成交、零成本；
   - 若报错，打印完整错误信息，方便判断根因。
 
-只在「容器内」运行（SDK 只装在容器里）：
-    docker exec -it polymarket-bot python /app/test_order.py
+市场发现 / 订单簿获取直接复用 bot 自己的 feeds/polymarket_clob.py（aiohttp 实现，
+已验证可用），避免自己用 urllib 复刻时被 Cloudflare 拦。
+
+只在「容器 / 服务器」上运行（SDK + 网络都在那边）：
+    python3 test_order.py
 """
+import asyncio
 import json
 import sys
-import time
-import urllib.parse
-import urllib.request
+
+import aiohttp
 
 from config import (
     PRIVATE_KEY, FUNDER_ADDRESS, SIGNATURE_TYPE,
     API_KEY, API_SECRET, API_PASSPHRASE,
-    POLYMARKET_HOST, GAMMA_HOST, CHAIN_ID,
+    POLYMARKET_HOST, CHAIN_ID,
+)
+from feeds.polymarket_clob import (
+    _fetch_active_markets, get_active_markets, fetch_order_book,
 )
 
 # ── 测试参数（尽量小）──────────────────────────────────────────────
-TEST_USD = 1.0      # 下单金额（美元）。Polymarket 单笔最小约 $1，别再往下调。
-TEST_PRICE = 0.10   # 限价：远低于 BTC 5m 市场约 0.5 的中间价 → 不会成交，只测下单。
+TEST_USD = 1.0        # 下单金额（美元）。Polymarket 单笔最小约 $1，别再往下调。
+TEST_PRICE = 0.10     # 目标限价：远低于 BTC 5m 约 0.5 的市价 → 挂着不会成交。
 
 
-def fetch_btc_5m_token():
-    """从 Gamma API 找一个当前活跃的 BTC 5 分钟 Up/Down 市场。
-
-    返回 (yes_token_id, question)；找不到返回 (None, None)。
-    """
-    now = int(time.time())
-    base = (now // 300) * 300
-    for off in (0, -1, 1, 2):
-        window_ts = base + off * 300
-        slug = f"btc-updown-5m-{window_ts}"
-        url = f"{GAMMA_HOST}/markets?" + urllib.parse.urlencode({"slug": slug})
-        try:
-            with urllib.request.urlopen(url, timeout=10) as r:
-                data = json.loads(r.read().decode())
-        except Exception:
-            continue
-        markets = data if isinstance(data, list) else data.get("markets", [])
+async def find_market_and_book():
+    """复用 bot 的市场发现，挑一个「剩余时间最多」的活跃市场，返回 (MarketInfo, OrderBook)。"""
+    async with aiohttp.ClientSession() as session:
+        await _fetch_active_markets(session)
+        markets = [m for m in get_active_markets().values() if m.remaining_seconds > 60]
+        rem = ", ".join(f"{int(m.remaining_seconds)}s" for m in markets)
+        print(f"  找到活跃市场: {len(markets)} 个" + (f"（剩余 {rem}）" if markets else ""))
         if not markets:
-            continue
+            return None, None
+        markets.sort(key=lambda m: m.remaining_seconds, reverse=True)
         m = markets[0]
-        if m.get("closed"):
-            continue
-        end_ts = window_ts + 300
-        if end_ts - now <= 30:   # 剩余时间太短，跳过（避免刚下单就结算）
-            continue
-        try:
-            token_ids = json.loads(m.get("clobTokenIds") or "[]")
-        except Exception:
-            continue
-        if len(token_ids) >= 2:
-            return token_ids[0], m.get("question", slug)  # index 0 = Up ≡ YES
-    return None, None
+        book = await fetch_order_book(session, m.yes_token_id)
+        return m, book
 
 
 def main() -> None:
@@ -74,7 +61,7 @@ def main() -> None:
             OrderArgs, OrderType, Side, OrderPayload, PartialCreateOrderOptions,
         )
     except ImportError:
-        print("错误：请在装有 py-clob-client-v2 的环境（容器内）运行。")
+        print("错误：请在装有 py-clob-client-v2 的环境（容器/服务器）运行。")
         sys.exit(1)
 
     print("=" * 64)
@@ -90,22 +77,38 @@ def main() -> None:
         print("❌ .env 缺少 PRIVATE_KEY 或 CLOB_API_KEY，无法测试。")
         sys.exit(1)
 
-    # 1) 找一个活跃市场
+    # 1) 找一个活跃市场 + 订单簿（复用 bot 的 aiohttp 路径）
     print("正在查找当前 BTC 5 分钟市场…")
-    token_id, question = fetch_btc_5m_token()
-    if not token_id:
-        print("❌ 没找到活跃的 BTC 5 分钟市场（可能正好在窗口切换），稍后再试。")
+    market, book = asyncio.run(find_market_and_book())
+    if market is None:
+        print("❌ 没找到剩余时间 > 60s 的活跃 BTC 5 分钟市场，稍后再试。")
         sys.exit(1)
-    print(f"  市场: {question}")
+
+    token_id = market.yes_token_id
+    tick = str(book.tick_size) if (book and book.tick_size) else "0.01"
+    tick_f = float(tick)
+    best_ask = book.best_ask if book else None
+    best_bid = book.best_bid if book else None
+    print(f"  市场: {market.question}")
     print(f"  token_id(YES/Up): {token_id}")
+    print(f"  盘口: bid={best_bid} ask={best_ask} tick={tick} 剩余={int(market.remaining_seconds)}s")
     print()
 
-    # 2) 构建客户端（与 execution/order_manager.py 完全一致）
-    creds = ApiCreds(
-        api_key=API_KEY,
-        api_secret=API_SECRET,
-        api_passphrase=API_PASSPHRASE,
-    )
+    # 2) 定价：确保远低于卖一价（不会成交），且落在 tick 网格上
+    price = TEST_PRICE
+    if best_ask is not None:
+        max_safe = best_ask - 3 * tick_f      # 至少低卖一价 3 个 tick，绝不吃单
+        if price > max_safe:
+            price = max(tick_f, max_safe)
+    price = round(round(price / tick_f) * tick_f, 4)
+
+    # 数量：满足金额 + 市场最小下单量
+    size = round(TEST_USD / price, 2)
+    if book and book.min_order_size and size < book.min_order_size:
+        size = book.min_order_size
+
+    # 3) 构建客户端（与 execution/order_manager.py 完全一致）
+    creds = ApiCreds(api_key=API_KEY, api_secret=API_SECRET, api_passphrase=API_PASSPHRASE)
     client = ClobClient(
         host=POLYMARKET_HOST,
         chain_id=CHAIN_ID,
@@ -114,14 +117,6 @@ def main() -> None:
         signature_type=SignatureTypeV2(SIGNATURE_TYPE),
         funder=FUNDER_ADDRESS or None,
     )
-
-    # 3) 计算下单参数
-    try:
-        tick = str(client.get_tick_size(token_id))
-    except Exception:
-        tick = "0.01"   # BTC updown 市场固定 0.01
-    price = TEST_PRICE
-    size = round(TEST_USD / price, 2)
 
     print(f"将挂 GTC 买单: 限价={price} 数量={size} 金额≈${price * size:.2f} (tick={tick})")
     print("（价格远低于市价 → 不会成交，只验证下单是否被接受；成功后立即撤单）")
@@ -133,12 +128,7 @@ def main() -> None:
     # 4) 下单（这一步就是之前报 maker 错误的地方）
     print("\n提交订单中…")
     try:
-        order_args = OrderArgs(
-            token_id=token_id,
-            price=price,
-            size=size,
-            side=Side.BUY,
-        )
+        order_args = OrderArgs(token_id=token_id, price=price, size=size, side=Side.BUY)
         resp = client.create_and_post_order(
             order_args=order_args,
             options=PartialCreateOrderOptions(tick_size=tick),
