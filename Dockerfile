@@ -1,9 +1,13 @@
 FROM python:3.11-slim
 
+ENV TZ=Asia/Shanghai
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    tzdata \
+    && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

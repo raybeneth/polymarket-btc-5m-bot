@@ -8,7 +8,7 @@ alongside the DB writes, for manual inspection/debugging.
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import colorlog
@@ -16,6 +16,13 @@ import colorlog
 from config import LOG_LEVEL, TRADE_LOG_FILE
 
 POSITION_LOG_FILE = "positions.log"
+
+CST = timezone(timedelta(hours=8))
+
+
+def _cst_converter(secs: float) -> time.struct_time:
+    """Render log timestamps in UTC+8 regardless of the host's system timezone."""
+    return time.gmtime(secs + 8 * 3600)
 
 
 def setup_logging() -> None:
@@ -28,8 +35,7 @@ def setup_logging() -> None:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-    handler = colorlog.StreamHandler(stream=sys.stderr)
-    handler.setFormatter(colorlog.ColoredFormatter(
+    console_formatter = colorlog.ColoredFormatter(
         "%(log_color)s%(asctime)s %(levelname)-8s%(reset)s %(name)s — %(message)s",
         datefmt="%H:%M:%S",
         log_colors={
@@ -39,17 +45,23 @@ def setup_logging() -> None:
             "ERROR":    "red",
             "CRITICAL": "bold_red",
         },
-    ))
+    )
+    console_formatter.converter = _cst_converter
+
+    handler = colorlog.StreamHandler(stream=sys.stderr)
+    handler.setFormatter(console_formatter)
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
     root.addHandler(handler)
 
     # File handler (plain, no colours)
-    fh = logging.FileHandler("bot.log", encoding="utf-8")
-    fh.setFormatter(logging.Formatter(
+    file_formatter = logging.Formatter(
         "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
-    ))
+    )
+    file_formatter.converter = _cst_converter
+    fh = logging.FileHandler("bot.log", encoding="utf-8")
+    fh.setFormatter(file_formatter)
     root.addHandler(fh)
 
 
@@ -72,7 +84,7 @@ def log_position_open(order_id: str, market_id: str, side: str,
                       entry_price: float, shares: float, score: float,
                       mode: str) -> None:
     """Log position open to positions.log (backup)."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
     line = (
         f"[{now}] 开仓 | 模式={mode} | 订单={order_id} | "
         f"市场={market_id[:16]}… | 方向={side} | "
@@ -87,7 +99,7 @@ def log_position_close(order_id: str, market_id: str, side: str,
                        shares: float, pnl: float, result: str,
                        mode: str) -> None:
     """Log position close with P&L to positions.log (backup)."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
     line = (
         f"[{now}] 平仓 | 模式={mode} | 订单={order_id} | "
         f"市场={market_id[:16]}… | 方向={side} | "
