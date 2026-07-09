@@ -24,7 +24,6 @@
 polymarket-btc-5m-bot/
 ├── main.py                   # 主循环，每 2 秒评估一次所有活跃市场
 ├── config.py                 # 所有阈值的唯一来源，改参数只动这一个文件
-├── get_credentials.py        # 一次性运行，自动生成 .env 凭证
 ├── .env.example              # 环境变量模板
 ├── .gitignore                # 排除 .env 和日志文件
 ├── requirements.txt
@@ -56,8 +55,9 @@ polymarket-btc-5m-bot/
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 获取凭证（见下方说明）
-python get_credentials.py
+# 2. 配置凭证（见下方说明）
+cp .env.example .env
+# 编辑 .env，填入 PRIVATE_KEY（和 FUNDER_ADDRESS，如果有代理钱包）
 
 # 3. 模拟模式启动（默认，不花真钱）
 python main.py
@@ -71,11 +71,11 @@ python main.py
 
 ## 凭证获取方法
 
-Polymarket CLOB 使用两层认证体系：
+机器人下单用的是 Polymarket 官方的 `polymarket-client`（`AsyncSecureClient`），**只需要一个 `PRIVATE_KEY`**——它会自己用这把私钥派生 API 认证，并自动识别钱包类型（EOA / 代理 / Gnosis Safe / deposit wallet），不需要手动申请或配置任何 L2 API 密钥。
 
-### L1 — 钱包私钥（PRIVATE_KEY）
+### PRIVATE_KEY
 
-**用途**：给每一笔链上订单签名，保证不可伪造。
+**用途**：给每一笔链上订单签名，保证不可伪造；同时用来自动派生 API 认证。
 
 **获取方式**：
 - MetaMask：右上角菜单 → 账户详情 → 导出私钥
@@ -85,35 +85,17 @@ Polymarket CLOB 使用两层认证体系：
 > **安全提示**：私钥是你资产的唯一控制权。只在可信机器上使用，
 > 不要截图，不要发给任何人，不要提交到 git（`.gitignore` 已排除 `.env`）。
 
-### L2 — REST API 密钥（API_KEY / SECRET / PASSPHRASE）
+**前提条件**：这个钱包地址必须至少在 [polymarket.com](https://polymarket.com) 连接登录过一次（不需要充值，只需连接钱包），否则服务器不认识这个地址。
 
-**用途**：给每个 HTTP 请求签名，Polymarket 服务器用来验证调用者身份。
+### FUNDER_ADDRESS（可选）
 
-**获取方式**：这三个值**不需要手动申请**，由 `py-clob-client` 用你的私钥自动派生：
-
-```
-你的私钥  →  签名一条标准消息  →  发送给 CLOB /auth/api-key  →  服务器返回 L2 凭证
-```
-
-这是确定性派生：**同一私钥每次得到相同的凭证**，不会重复创建。
-
-**一键生成**：
-
-```bash
-python get_credentials.py
-```
-
-脚本会提示输入私钥，完成后自动写入 `.env` 文件。
-
-**前提条件**：这个钱包地址必须至少在 [polymarket.com](https://polymarket.com) 连接登录过一次（不需要充值，只需连接钱包），否则 CLOB 服务器不认识这个地址，会返回 401 错误。
+如果你的 Polymarket 页面显示的钱包地址跟这把私钥直接对应的地址不一样（大多数 MetaMask/浏览器钱包连接、邮箱/Magic 登录账户都是这种情况——实际资金在一个代理钱包里），把 Polymarket 页面上显示的那个地址填到这里。
 
 ### .env 文件示例
 
 ```env
 PRIVATE_KEY=0xabcdef...（64位十六进制）
-CLOB_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CLOB_API_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-CLOB_API_PASSPHRASE=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+FUNDER_ADDRESS=0x...（可选，代理钱包地址）
 
 PAPER_TRADING=true       # true=模拟  false=真实下单
 TRADE_SIZE_USD=1.0       # 每笔交易金额（美元）

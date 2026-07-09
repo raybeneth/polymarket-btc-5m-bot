@@ -24,7 +24,6 @@ A bot that trades BTC 5-minute binary markets on Polymarket. It only places orde
 polymarket-btc-5m-bot/
 ├── main.py                   # Main loop — evaluates all active markets every 2 seconds
 ├── config.py                 # Single source of truth for all thresholds
-├── get_credentials.py        # Run once to auto-generate .env credentials
 ├── .env.example              # Environment variable template
 ├── .gitignore                # Excludes .env and log files
 ├── requirements.txt
@@ -56,8 +55,9 @@ polymarket-btc-5m-bot/
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Obtain credentials (see section below)
-python get_credentials.py
+# 2. Configure credentials (see section below)
+cp .env.example .env
+# Edit .env: fill in PRIVATE_KEY (and FUNDER_ADDRESS if you trade through a proxy wallet)
 
 # 3. Start in paper trading mode (default — no real money)
 python main.py
@@ -71,11 +71,11 @@ python main.py
 
 ## How to Obtain Credentials
 
-Polymarket CLOB uses a two-layer authentication system.
+The bot places orders through Polymarket's official `polymarket-client` SDK (`AsyncSecureClient`), which only needs a **`PRIVATE_KEY`** — it derives its own API auth from that key and auto-detects the wallet type (EOA / proxy / Gnosis Safe / deposit wallet) on-chain. No manual L2 API key setup is needed.
 
-### L1 — Wallet Private Key (`PRIVATE_KEY`)
+### PRIVATE_KEY
 
-**Purpose**: Signs every on-chain order to guarantee authenticity.
+**Purpose**: Signs every on-chain order to guarantee authenticity, and is used to auto-derive API auth.
 
 **How to get it**:
 - MetaMask: top-right menu → Account Details → Export Private Key
@@ -86,35 +86,17 @@ Polymarket CLOB uses a two-layer authentication system.
 > Use it only on trusted machines. Never screenshot it, share it, or commit it to git
 > (`.env` is already excluded via `.gitignore`).
 
-### L2 — REST API Key (`API_KEY` / `SECRET` / `PASSPHRASE`)
+**Prerequisite**: The wallet address must have connected to [polymarket.com](https://polymarket.com) at least once (no deposit needed — just a wallet connection). Otherwise the server does not recognize the address.
 
-**Purpose**: Signs every HTTP request so Polymarket's servers can verify the caller's identity.
+### FUNDER_ADDRESS (optional)
 
-**How to get it**: These three values **do not require manual registration**. They are derived automatically from your private key by `py-clob-client`:
-
-```
-Your private key  →  Signs a standard message  →  Sent to CLOB /auth/api-key  →  Server returns L2 credentials
-```
-
-This is deterministic derivation: **the same private key always produces the same credentials** — no duplicate accounts are created.
-
-**One-command generation**:
-
-```bash
-python get_credentials.py
-```
-
-The script prompts for your private key and writes the credentials directly to `.env`.
-
-**Prerequisite**: The wallet address must have connected to [polymarket.com](https://polymarket.com) at least once (no deposit needed — just a wallet connection). Otherwise the CLOB server does not recognize the address and returns a `401` error.
+If the wallet address shown on your Polymarket page differs from the address derived directly from this private key (true for most MetaMask/browser-wallet connections and email/Magic-login accounts — your real funds sit in a proxy wallet), set this to the address shown on the Polymarket page.
 
 ### .env File Example
 
 ```env
 PRIVATE_KEY=0xabcdef...           # 64-character hex
-CLOB_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CLOB_API_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-CLOB_API_PASSPHRASE=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+FUNDER_ADDRESS=0x...              # optional, proxy wallet address
 
 PAPER_TRADING=true       # true = paper mode  |  false = live orders
 TRADE_SIZE_USD=1.0       # USD amount per trade

@@ -13,32 +13,28 @@ load_dotenv()
 # ──────────────────────────────────────────────
 # CREDENTIALS
 # ──────────────────────────────────────────────
+# PRIVATE_KEY is the only credential needed — execution/order_manager.py's
+# AsyncSecureClient (polymarket-client) derives its own L2 API auth from it,
+# and auto-detects the wallet type (EOA / proxy / Gnosis Safe / deposit
+# wallet) on-chain. No separate CLOB_API_KEY/SECRET/PASSPHRASE or
+# SIGNATURE_TYPE config is needed or read anywhere in this codebase.
 PRIVATE_KEY: str = os.getenv("PRIVATE_KEY", "")
-API_KEY: str = os.getenv("CLOB_API_KEY", "")
-API_SECRET: str = os.getenv("CLOB_API_SECRET", "")
-API_PASSPHRASE: str = os.getenv("CLOB_API_PASSPHRASE", "")
 POLYMARKET_HOST: str = "https://clob.polymarket.com"
 GAMMA_HOST: str = "https://gamma-api.polymarket.com"
 CHAIN_ID: int = 137  # Polygon mainnet
 
-# Polymarket wraps most accounts (browser-wallet connect, email/Magic login)
-# in a proxy contract that actually custodies funds — PRIVATE_KEY only signs
-# on behalf of that proxy, it doesn't hold the USDC itself. If your Polymarket
-# UI wallet address differs from the address derived from PRIVATE_KEY, set
-# FUNDER_ADDRESS to that UI address so balance checks and orders target the
-# right account. SIGNATURE_TYPE: 0 = EOA (funds held directly by PRIVATE_KEY's
-# address, no proxy), 1 = POLY_PROXY (email/Magic-created wallets), 2 =
-# POLY_GNOSIS_SAFE (browser-wallet/MetaMask-created proxy — the common case).
+# Polymarket wraps most accounts (browser-wallet connect, email/Magic login,
+# deposit wallets) in a proxy contract that actually custodies funds —
+# PRIVATE_KEY only signs on behalf of that proxy, it doesn't hold the pUSD
+# itself. If your Polymarket UI wallet address differs from the address
+# derived from PRIVATE_KEY, set FUNDER_ADDRESS to that UI address so balance
+# checks and orders target the right account.
 FUNDER_ADDRESS: str = os.getenv("FUNDER_ADDRESS", "")
-SIGNATURE_TYPE: int = int(os.getenv("SIGNATURE_TYPE", "2" if FUNDER_ADDRESS else "0"))
 
 # Dashboard balance (live mode only) is read directly from FUNDER_ADDRESS's
-# on-chain USDC balance rather than via CLOB's /balance-allowance endpoint.
-# That endpoint resolves which address to check from the L1 signer +
-# SIGNATURE_TYPE using Polymarket's own proxy-derivation formula, not from
-# FUNDER_ADDRESS — in bot setups where PRIVATE_KEY is a delegated trading key
-# rather than the funder account's own key, that derivation lands on a
-# different, unrelated (empty) address and silently reports balance=0.
+# on-chain pUSD balance via a Polygon RPC call, rather than through the CLOB
+# API — this always matches what polymarket.com's UI shows regardless of
+# how the CLOB backend resolves the account internally.
 POLYGON_RPC_URL: str = os.getenv("POLYGON_RPC_URL", "https://polygon-bor.publicnode.com")
 # Polymarket's April 28 2026 "CLOB V2" upgrade replaced USDC.e with pUSD as the
 # collateral token traders actually hold — FUNDER_ADDRESS's pUSD balance is
