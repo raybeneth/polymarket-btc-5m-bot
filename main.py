@@ -189,7 +189,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         reversed_, rev_details = direction.check_reversal(side2, time.time())
         if reversed_:
             direction.record_skip("reversal_guard")
-            log.info(f"[{mid}] 动量就绪后反转哨兵拦截: {side2} move={rev_details.get('move_pct')}%")
+            log.debug(f"[{mid}] 动量就绪后反转哨兵拦截: {side2} move={rev_details.get('move_pct')}%")
             return
 
         pending_decision.entry_price = current_price
@@ -235,7 +235,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # cliff effect without adding information (see docs/optimizations/008).
     if consistency < DIRECTION_CONSISTENCY_FLOOR:
         direction.record_skip("noise_skip")
-        log.info(f"[{mid}] 跳过噪声: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_FLOOR:.0%} (dir={raw_dir:.0f})")
+        log.debug(f"[{mid}] 跳过噪声: consistency={consistency:.0%} < {DIRECTION_CONSISTENCY_FLOOR:.0%} (dir={raw_dir:.0f})")
         return
 
     # Near-zero direction magnitude must not fire regardless of how high
@@ -245,7 +245,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # PAPER-93332164: dir=0.5, combined=50.48, still lost -$154 at LOW tier).
     if dir_result.score < DIRECTION_MED_MIN_SCORE:
         direction.record_skip("weak_skip")
-        log.info(
+        log.debug(
             f"[{mid}] 跳过方向弱信号: filter_score={dir_result.score:.1f} < {DIRECTION_MED_MIN_SCORE} "
             f"(raw={raw_dir:.0f}, consistency={consistency:.0%})"
         )
@@ -343,7 +343,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     reversed_, rev_details = direction.check_reversal(side, time.time())
     if reversed_:
         direction.record_skip("reversal_guard")
-        log.info(
+        log.debug(
             f"[{mid}] 反转哨兵拦截: side={side} move={rev_details.get('move_pct')}% "
             f"threshold={rev_details.get('threshold_pct')}%"
         )
