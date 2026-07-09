@@ -532,26 +532,29 @@
 
   .ws-status { font-size: 10px; display: flex; align-items: center; gap: 4px; }
 
-  /* ── Main row (desktop): BTC chart + Position History side by side on top,
-     Open Positions full-width below. Mobile overrides this back to the
-     original chart → Open Positions → Position History stacking order via
-     grid-area:auto + order, in the media query below — see that block for
-     why this needs explicit per-section rules rather than a generic
-     ":last-child" border rule (named-area placement decouples visual order
-     from DOM order, so "last child" no longer means "visually last"). */
+  /* ── Main row (desktop): BTC chart + Live Log side by side on top,
+     Open Positions and Position History full-width below. Mobile overrides
+     this back to the original chart → Open Positions → Position History →
+     Live Log stacking order via grid-area:auto + order, in the media query
+     below — see that block for why this needs explicit per-section rules
+     rather than a generic ":last-child" border rule (named-area placement
+     decouples visual order from DOM order, so "last child" no longer means
+     "visually last"). */
   .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
-      "chart     history"
-      "positions positions";
+      "chart      history"
+      "positions  positions"
+      "poshistory poshistory";
     border-bottom: 1px solid var(--border);
   }
   .main-row > .btc-chart-card { grid-area: chart; border-right: 1px solid var(--border); min-width: 0; }
   /* Height is matched to the chart card in JS (see syncHistoryHeightToChart),
      not CSS — desktop only, applied/removed there based on viewport width. */
-  .main-row > .position-history-section { grid-area: history; min-width: 0; }
+  .main-row > .live-log-section { grid-area: history; min-width: 0; }
   .main-row > .open-positions-section { grid-area: positions; border-top: 1px solid var(--border); min-width: 0; }
+  .main-row > .position-history-section { grid-area: poshistory; border-top: 1px solid var(--border); min-width: 0; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -583,13 +586,14 @@
     .btc-chart-card .chart-wrap { height: 330px; }
 
     /* Stack the main row in the ORIGINAL order regardless of the desktop
-       swap above: chart → Open Positions → Position History. Named grid
-       areas don't apply on a single column, so fall back to plain
-       top-to-bottom stacking via `order` on each section. */
+       swap above: chart → Open Positions → Position History → Live Log.
+       Named grid areas don't apply on a single column, so fall back to
+       plain top-to-bottom stacking via `order` on each section. */
     .main-row { grid-template-columns: 1fr; grid-template-areas: none; }
     .main-row > .btc-chart-card { grid-area: auto; order: 1; border-right: none; border-bottom: 1px solid var(--border); }
     .main-row > .open-positions-section { grid-area: auto; order: 2; border-top: none; border-bottom: 1px solid var(--border); }
-    .main-row > .position-history-section { grid-area: auto; order: 3; border-bottom: 1px solid var(--border); }
+    .main-row > .position-history-section { grid-area: auto; order: 3; border-top: none; border-bottom: 1px solid var(--border); }
+    .main-row > .live-log-section { grid-area: auto; order: 4; border-bottom: 1px solid var(--border); }
     /* JS only measures/applies the matched height above 768px (see
        syncHistoryHeightToChart) and clears the inline style below it, so no
        CSS override is needed here — this comment just documents why. */
@@ -764,7 +768,9 @@
 
 </div>
 
-<!-- Desktop: BTC chart (left) + Open Positions (right); mobile: stacked -->
+<!-- Desktop: BTC chart (left) + Live Log (right); Open Positions and Position
+     History full-width below; mobile: stacked in the original
+     chart → Open Positions → Position History → Live Log order -->
 <div class="main-row">
 
   <div class="chart-card btc-chart-card">
@@ -780,6 +786,31 @@
       <div id="btcChart" style="width:100%;height:100%"></div>
       <svg class="trade-connector-layer" id="btcConnectorLayer"></svg>
       <div class="trade-label-layer" id="btcLabelLayer"></div>
+    </div>
+  </div>
+
+  <div class="section live-log-section">
+    <div class="section-header">
+      <span class="section-title">Live Log</span>
+      <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
+    </div>
+    <div class="log-container" id="logContainer"></div>
+  </div>
+
+  <div class="section open-positions-section">
+    <div class="section-header">
+      <span class="section-title">Open Positions</span>
+      <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
+    </div>
+    <div class="table-scroll">
+      <table class="positions-table">
+        <thead>
+          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
+        </thead>
+        <tbody id="posBody">
+          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -800,32 +831,6 @@
     </div>
   </div>
 
-  <div class="section open-positions-section">
-    <div class="section-header">
-      <span class="section-title">Open Positions</span>
-      <span style="color:var(--text-dim);font-size:10px" id="posCount">0</span>
-    </div>
-    <div class="table-scroll">
-      <table class="positions-table">
-        <thead>
-          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
-        </thead>
-        <tbody id="posBody">
-          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-</div>
-
-<!-- Live Log — full width -->
-<div class="section">
-  <div class="section-header">
-    <span class="section-title">Live Log</span>
-    <span style="color:var(--text-dim);font-size:10px" id="logCount">0 lines</span>
-  </div>
-  <div class="log-container" id="logContainer"></div>
 </div>
 
 
@@ -1499,36 +1504,36 @@ $('pnlRanges').addEventListener('click', e => {
   applyPnlRange(btn.dataset.range);
 });
 
-// Desktop only: make Position History's visible height match the BTC chart
-// card's actual rendered height, so the two cards in that row line up.
+// Desktop only: make Live Log's visible height match the BTC chart card's
+// actual rendered height, so the two cards in that row line up.
 // Measured directly in JS (not left to CSS grid/flex stretch) so it's exact
 // regardless of layout subtleties — mobile clears the inline style entirely
-// and falls back to the CSS's fixed ~6-row height untouched.
+// and falls back to the CSS's fixed height untouched.
 const MOBILE_BREAKPOINT_PX = 768;
 
 function syncHistoryHeightToChart() {
-  const historyContainer = $('historyContainer');
+  const logContainerEl = $('logContainer');
   const chartCard = document.querySelector('.btc-chart-card');
-  const header = document.querySelector('.position-history-section .section-header');
-  if (!historyContainer || !chartCard || !header) return;
+  const header = document.querySelector('.live-log-section .section-header');
+  if (!logContainerEl || !chartCard || !header) return;
 
   if (window.innerWidth <= MOBILE_BREAKPOINT_PX) {
-    historyContainer.style.height = '';   // clear override — CSS's fixed 280px applies
+    logContainerEl.style.height = '';   // clear override — CSS's fixed height applies
     return;
   }
 
   // Measure the chart card's INTRINSIC height from its non-stretching children
   // (chart-wrap has a fixed CSS height + flex:none), NOT chartCard.offsetHeight.
-  // The card and this history section share a grid row with align-items:stretch,
-  // so reading the card's stretched offsetHeight and then setting the history
+  // The card and this log section share a grid row with align-items:stretch,
+  // so reading the card's stretched offsetHeight and then setting the log
   // container from it forms a feedback loop: any sub-pixel/border overshoot in
-  // the history side grows the row, stretches the card, and each render() tick
+  // the log side grows the row, stretches the card, and each render() tick
   // (which calls this) ratchets the height up unbounded over hours. Summing the
   // card's own children makes this measurement stable and idempotent.
   let intrinsic = 0;
   for (const child of chartCard.children) intrinsic += child.offsetHeight;
   const height = Math.max(80, intrinsic - header.offsetHeight);
-  historyContainer.style.height = height + 'px';
+  logContainerEl.style.height = height + 'px';
 }
 
 window.addEventListener('resize', syncHistoryHeightToChart);
