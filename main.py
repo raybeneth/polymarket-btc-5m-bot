@@ -568,8 +568,12 @@ async def main_loop() -> None:
                 continue
 
             try:
-                tasks = [evaluate_market(session, m) for m in markets.values()]
-                await asyncio.gather(*tasks, return_exceptions=True)
+                market_list = list(markets.values())
+                tasks = [evaluate_market(session, m) for m in market_list]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for m, result in zip(market_list, results):
+                    if isinstance(result, Exception):
+                        log.error(f"[{m.market_id[:10]}] evaluate_market 异常: {result!r}", exc_info=result)
                 await order_manager.check_early_exits(session)
                 await order_manager.resolve_expired_positions()
                 # Full closed-history is only for the dashboard — refresh it
