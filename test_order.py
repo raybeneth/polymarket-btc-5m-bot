@@ -20,7 +20,6 @@ API creds）下一笔「最小金额」的真实订单，用来验证
     python3 test_order.py
 """
 import asyncio
-import json
 import sys
 
 import aiohttp
@@ -58,7 +57,7 @@ def main() -> None:
     try:
         from py_clob_client_v2 import (
             ClobClient, ApiCreds, SignatureTypeV2,
-            OrderArgs, OrderType, Side, OrderPayload, PartialCreateOrderOptions,
+            OrderArgs, Side, PartialCreateOrderOptions,
         )
     except ImportError:
         print("错误：请在装有 py-clob-client-v2 的环境（容器/服务器）运行。")
@@ -118,47 +117,35 @@ def main() -> None:
         funder=FUNDER_ADDRESS or None,
     )
 
-    print(f"将挂 GTC 买单: 限价={price} 数量={size} 金额≈${price * size:.2f} (tick={tick})")
-    print("（价格远低于市价 → 不会成交，只验证下单是否被接受；成功后立即撤单）")
+    print(f"将构建订单: 限价={price} 数量={size} 金额≈${price * size:.2f} (tick={tick})")
+    print("（仅本地构建并签名订单，不提交、不下单、不产生真实挂单）")
     print()
-    if input("确认真实下单？(yes/N): ").strip().lower() != "yes":
-        print("已取消。")
-        return
 
-    # 4) 下单（这一步就是之前报 maker 错误的地方）
-    print("\n提交订单中…")
+    # 4) 只构建 + 签名订单（本地操作，不 POST 到服务器）
+    #    打印出来检查 maker / signer / signatureType / signature 是否符合预期。
     try:
         order_args = OrderArgs(token_id=token_id, price=price, size=size, side=Side.BUY)
-        resp = client.create_and_post_order(
+        order = client.create_order(
             order_args=order_args,
             options=PartialCreateOrderOptions(tick_size=tick),
-            order_type=OrderType.GTC,
         )
     except Exception as exc:
-        print()
-        print("❌ 下单失败，完整错误：")
+        print("❌ 构建订单失败，完整错误：")
         print(f"   {type(exc).__name__}: {exc}")
-        print()
-        print("→ 若仍是 'maker address not allowed'，说明 maker 问题未解决。")
         sys.exit(2)
 
-    print()
-    print("✅ 下单被服务器接受！返回：")
-    print(json.dumps(resp, indent=2, ensure_ascii=False, default=str))
-    order_id = resp.get("orderID") or resp.get("id")
+    print("构建的订单对象：")
+    print(order)
 
-    # 5) 立即撤单，确保零成交零成本
-    if order_id:
-        try:
-            client.cancel_order(OrderPayload(orderID=order_id))
-            print(f"\n已撤单 {order_id} —— 零成交、零成本。")
-        except Exception as exc:
-            print(f"\n⚠️ 自动撤单失败，请手动到网页端撤掉订单 {order_id}: {exc}")
-    else:
-        print("\n⚠️ 返回里没有 orderID，请到网页端确认是否有挂单需要手动撤销。")
-
-    print()
-    print("结论：maker address 问题已解决，下单链路可用 ✅")
+    # 额外：尽量把字段结构化打印出来，方便核对 maker/signer/signatureType
+    try:
+        d = order.__dict__ if hasattr(order, "__dict__") else dict(order)
+        print()
+        print("字段明细：")
+        for k, v in d.items():
+            print(f"  {k} = {v}")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
