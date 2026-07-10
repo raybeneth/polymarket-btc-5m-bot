@@ -305,7 +305,9 @@
     border-radius: 6px;
     color: var(--text);
     font-family: var(--font);
-    font-size: 13px;
+    /* 16px, not 13px: iOS/mobile browsers auto-zoom the viewport on focus
+       for any input with a computed font-size below 16px. */
+    font-size: 16px;
   }
   .pause-input:focus { outline: none; border-color: var(--accent); }
   .pause-error { color: var(--red); font-size: 11px; margin-top: 8px; min-height: 14px; }
