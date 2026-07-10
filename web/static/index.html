@@ -1293,9 +1293,13 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
 }
 
 // ── Cumulative Profit/Loss chart (all positions), Polymarket-widget style ──
-// Displayed values are account balance + cumulative P&L (an account-value
-// curve), not raw P&L from zero — ACCOUNT_BALANCE_USD from the backend is
-// just a display baseline here; it doesn't feed into trade sizing or PnL math.
+// The big number and the curve are deliberately decoupled:
+//   - Big number = the real-time wallet balance (live mode: on-chain pUSD
+//     balance; paper mode: the simulated ledger) — never derived from
+//     position P&L math, so it can't drift from what's actually in the wallet.
+//   - Curve = pure cumulative per-position P&L from zero, independent of the
+//     account balance — a "trading performance" line, unaffected by
+//     deposits/withdrawals or whatever the wallet balance is doing.
 let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
@@ -1348,10 +1352,10 @@ function initPnlChart() {
   // series hack needed. Same green/red as the rest of the dashboard, not a
   // new brand hue.
   _pnlSeries = _pnlChart.addBaselineSeries({
-    // Baseline sits at the starting account balance, not literal zero — the
-    // curve reads green above it (currently in profit overall) and red below
-    // (currently in loss overall), matching the "balance + P&L" framing.
-    baseValue: { type: 'price', price: _accountBalance },
+    // Baseline sits at literal zero P&L — the curve reads green above it
+    // (net profitable) and red below (net loss), independent of the wallet
+    // balance shown in the headline above.
+    baseValue: { type: 'price', price: 0 },
     topLineColor: '#27a69a',
     topFillColor1: 'rgba(39,166,154,0.35)',
     topFillColor2: 'rgba(39,166,154,0.02)',
@@ -1376,11 +1380,12 @@ function initPnlChart() {
   });
 }
 
-// The big number is always the CURRENT total account balance (starting
-// balance + all-time cumulative P&L) — same value regardless of which range
-// tab is active, matching how portfolio-value widgets usually work; the
-// range tabs only control how far back the curve/sub-line change looks.
-// With (value, time): hovering shows that single point's balance instead.
+// The big number is always the CURRENT real-time wallet balance — same value
+// regardless of which range tab is active, and never adjusted by position
+// P&L math (see module comment above). The range tabs only affect the
+// sub-line's "change over range" figure, which reads from the P&L curve.
+// With (value, time): hovering shows that curve point's raw P&L instead —
+// a signed change, not a balance.
 function _renderPnlHeadline(hoverValue, hoverTime) {
   const balEl = $('pnlBalance'), subEl = $('pnlSub');
   if (!balEl || !subEl) return;
@@ -1396,17 +1401,15 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
   }
 
   if (hoverValue != null) {
-    balEl.textContent = '$' + hoverValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    balEl.className = 'pnl-balance ' + (hoverValue >= _accountBalance ? 'positive' : 'negative');
+    balEl.textContent = (hoverValue >= 0 ? '+' : '') + '$' + hoverValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    balEl.className = 'pnl-balance ' + (hoverValue >= 0 ? 'positive' : 'negative');
     const d = new Date(hoverTime * 1000);
     subEl.textContent = d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
     return;
   }
 
-  const latestPnl = _pnlFullSeries.length ? _pnlFullSeries[_pnlFullSeries.length - 1].v : 0;
-  const total = _accountBalance + latestPnl;
-  balEl.textContent = '$' + total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  balEl.className = 'pnl-balance ' + (latestPnl >= 0 ? 'positive' : 'negative');
+  balEl.textContent = '$' + _accountBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  balEl.className = 'pnl-balance neutral';
 
   // Latest poll failed to fetch a real balance (live mode only) — the number
   // shown above is the last known-good value, not a live one. Say so instead
@@ -1416,9 +1419,8 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
     return;
   }
 
-  // Sub-line: net change over the selected range, same as before — this is
-  // what the range tabs actually affect now that the headline is a constant
-  // "current total" regardless of tab.
+  // Sub-line: net change in cumulative P&L over the selected range — purely
+  // from the P&L curve, unrelated to the wallet balance shown above.
   const cutoff = _pnlRangeCutoff(_pnlRange);
   const before = _pnlFullSeries.filter(p => p.t < cutoff);
   const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
@@ -1468,12 +1470,12 @@ function applyPnlRange(range) {
 
   const cutoff = _pnlRangeCutoff(range);
   const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
-  // Plot balance + cumulative P&L, not raw P&L — the chart needs at least one
-  // point to render, so seed a flat "balance, no P&L yet" line if this range
-  // has no closed trades rather than leaving it blank.
+  // Plot raw cumulative P&L from zero — the chart needs at least one point to
+  // render, so seed a flat "no P&L yet" line at 0 if this range has no
+  // closed trades rather than leaving it blank.
   const data = inRange.length
-    ? _splineInterpolate(inRange.map(p => ({ time: p.t, value: p.v + _accountBalance })))
-    : [{ time: cutoff || Math.floor(Date.now() / 1000), value: _accountBalance }];
+    ? _splineInterpolate(inRange.map(p => ({ time: p.t, value: p.v })))
+    : [{ time: cutoff || Math.floor(Date.now() / 1000), value: 0 }];
   _pnlSeries.setData(data);
   _pnlChart.timeScale().fitContent();
   _renderPnlHeadline();
@@ -1483,10 +1485,8 @@ function updatePnlChart(series, accountBalance) {
   if (accountBalance != null) {
     _balanceLoaded = true;
     _balanceStale = false;
-    if (accountBalance !== _accountBalance) {
-      _accountBalance = accountBalance;
-      if (_pnlSeries) _pnlSeries.applyOptions({ baseValue: { type: 'price', price: _accountBalance } });
-    }
+    _accountBalance = accountBalance;   // feeds only the headline number now — the
+                                         // curve's baseline stays fixed at 0 (see initPnlChart)
   } else {
     // Backend sent no balance this poll — live-mode wallet query failed (or
     // hasn't run yet). Keep the last known _accountBalance rather than

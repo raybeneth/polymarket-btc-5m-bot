@@ -4,7 +4,11 @@
 
 CREATE TABLE IF NOT EXISTS positions (
     id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    order_id        VARCHAR(64)  NOT NULL,
+    -- 80 not 64: polymarket-client's order IDs are 66 chars ("0x" + 64 hex) —
+    -- the old py-clob-client's were shorter and fit VARCHAR(64), but that
+    -- silently truncated/rejected (MySQL error 1406) every real order insert
+    -- after the SDK migration, so live trades never made it into this table.
+    order_id        VARCHAR(80)  NOT NULL,
     market_id       VARCHAR(128) NOT NULL,
     token_id        VARCHAR(128) NOT NULL,
     side            ENUM('YES','NO') NOT NULL,
