@@ -46,7 +46,11 @@ from config import (
     TradeDecision,
 )
 from feeds import btc_price
-from feeds.polymarket_clob import run_scanner, get_active_markets, fetch_both_books, create_session
+from config import FUNDER_ADDRESS
+from feeds.polymarket_clob import (
+    run_scanner, get_active_markets, fetch_both_books, create_session,
+    fetch_user_pnl_series,
+)
 from filters import odds, timing, spread, chase, direction
 from execution import order_manager
 from execution.risk import get_state
@@ -81,6 +85,13 @@ STATS_REPORT_INTERVAL: float = 300.0  # 5 minutes
 # Live mode's wallet USDC balance, polled periodically (see main_loop) — paper
 # mode uses the DB-backed RiskState.balance instead, no polling needed.
 _wallet_balance: Optional[float] = None
+
+# Live mode's cumulative P&L series straight from Polymarket's own P&L API
+# (see feeds.polymarket_clob.fetch_user_pnl_series), polled periodically so the
+# dashboard's Profit/Loss curve/number match polymarket.com exactly. None until
+# the first successful fetch; paper mode leaves it None and uses the locally
+# computed series instead.
+_pnl_series_remote: Optional[list] = None
 
 
 def _btc_entry_ready() -> tuple[bool, str]:
@@ -435,22 +446,29 @@ def _build_web_state() -> dict:
             _target_cache[window_start] = btc_target
 
     # Cumulative P&L over time for the dashboard's Profit/Loss chart.
-    # _recent_closed is newest-first (closed_at DESC); walk it in chronological
-    # order to build a running total, one point per closed trade. Two trades
-    # closing in the same second collapse into one point (last value wins) —
-    # the chart library requires strictly increasing, unique timestamps.
-    pnl_series = []
-    running = 0.0
-    for h in reversed(_recent_closed):
-        running += h["pnl"] or 0.0
-        ts = h["closed_at"] or h["opened_at"]
-        if not ts:
-            continue
-        ts = int(ts)
-        if pnl_series and pnl_series[-1]["t"] == ts:
-            pnl_series[-1]["v"] = round(running, 4)
-        else:
-            pnl_series.append({"t": ts, "v": round(running, 4)})
+    # Live mode: prefer Polymarket's own P&L series (authoritative — matches the
+    # site's widget exactly, and unlike the local figure it accounts for trades
+    # the bot never recorded, on-chain settlements, and fees). Fall back to the
+    # locally-computed series in paper mode or before the first remote fetch.
+    if not PAPER_TRADING and _pnl_series_remote:
+        pnl_series = _pnl_series_remote
+    else:
+        # _recent_closed is newest-first (closed_at DESC); walk it in chronological
+        # order to build a running total, one point per closed trade. Two trades
+        # closing in the same second collapse into one point (last value wins) —
+        # the chart library requires strictly increasing, unique timestamps.
+        pnl_series = []
+        running = 0.0
+        for h in reversed(_recent_closed):
+            running += h["pnl"] or 0.0
+            ts = h["closed_at"] or h["opened_at"]
+            if not ts:
+                continue
+            ts = int(ts)
+            if pnl_series and pnl_series[-1]["t"] == ts:
+                pnl_series[-1]["v"] = round(running, 4)
+            else:
+                pnl_series.append({"t": ts, "v": round(running, 4)})
 
     return {
         "btc_price": btc_price.get_latest(),
@@ -496,7 +514,7 @@ def _build_web_state() -> dict:
 
 
 async def main_loop() -> None:
-    global _history, _start_time, _recent_closed, _last_stats_report, _wallet_balance
+    global _history, _start_time, _recent_closed, _last_stats_report, _wallet_balance, _pnl_series_remote
     _start_time = time.time()
     _last_stats_report = _start_time
 
@@ -588,6 +606,11 @@ async def main_loop() -> None:
                     _wallet_balance = await order_manager.get_funder_onchain_balance_usdc(session)
                     if _wallet_balance is None:
                         _wallet_balance = await loop.run_in_executor(None, order_manager.get_wallet_balance_usdc)
+                    # Refresh the authoritative P&L series alongside the balance
+                    # (both are the same cadence of Polymarket network reads).
+                    remote_pnl = await fetch_user_pnl_series(session, FUNDER_ADDRESS)
+                    if remote_pnl is not None:
+                        _pnl_series_remote = remote_pnl
                 # Periodic on-chain reconciliation (live mode only) — catches desync
                 # from partial fills, crashes mid-order, or unconfirmed sells that
                 # this loop's own bookkeeping can't detect on its own.

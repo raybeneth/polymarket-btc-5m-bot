@@ -84,6 +84,7 @@ def create_session() -> aiohttp.ClientSession:
 from config import (
     GAMMA_HOST,
     POLYMARKET_HOST,
+    USER_PNL_HOST,
     MARKET_MIN_VOLUME_USD,
     SCANNER_POLL_INTERVAL,
     DEPTH_LEVELS_TO_CHECK,
@@ -403,3 +404,55 @@ async def fetch_both_books(
         return_exceptions=False,
     )
     return yes_book, no_book
+
+
+# ─────────────────────────────────────────────
+# User P&L (Polymarket's own Profit/Loss series)
+# ─────────────────────────────────────────────
+
+async def fetch_user_pnl_series(
+    session: aiohttp.ClientSession,
+    address: str,
+    interval: str = "all",
+    fidelity: str = "1h",
+) -> Optional[list[dict]]:
+    """
+    Fetch Polymarket's own cumulative P&L series for a wallet — the exact data
+    behind polymarket.com's Profit/Loss widget. Using it means the dashboard's
+    curve and headline match the site instead of drifting from a P&L figure
+    recomputed off our (possibly incomplete) local positions table.
+
+    Endpoint: GET /user-pnl?user_address={addr}&interval={interval}&fidelity={fidelity}
+    Response: [{"t": <unix_seconds>, "p": <cumulative_pnl_usd>}, ...] oldest-first.
+    `fidelity` accepts values like "1d" / "18h" / "1h" (1h is the finest);
+    `interval` is "all" / "1d" / "1w" / "1m" — the P value is cumulative from
+    account inception regardless of interval, so the frontend range tabs still
+    filter it client-side.
+
+    Returns [{"t": int, "v": float}, ...] (renamed p→v to match the frontend's
+    existing pnl_series shape), or None on any error.
+    """
+    if not address:
+        return None
+    url = f"{USER_PNL_HOST}/user-pnl"
+    params = {"user_address": address, "interval": interval, "fidelity": fidelity}
+    try:
+        async with session.get(
+            url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status != 200:
+                body = (await resp.text())[:200].replace("\n", " ")
+                log.warning(f"user-pnl 获取失败 HTTP {resp.status} — {body!r}")
+                return None
+            data = await resp.json()
+    except Exception as exc:
+        log.warning(f"user-pnl 获取异常: {type(exc).__name__}: {exc}")
+        return None
+
+    series: list[dict] = []
+    for pt in data if isinstance(data, list) else []:
+        try:
+            series.append({"t": int(pt["t"]), "v": round(float(pt["p"]), 4)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return series

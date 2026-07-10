@@ -271,13 +271,10 @@
     padding: 2px 12px; color: var(--text-dim);
   }
 
-  /* ── Stats grid (full width; P&L chart removed) ─────────────────── */
+  /* ── Stats grid — four standalone bordered cards, same look as the
+     Portfolio/Profit-Loss blocks above ─────────────────────────────── */
   .stats-row {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 1px;
-    background: var(--border);
-    border-bottom: 1px solid var(--border);
+    padding: 16px 24px 0;
   }
   /* Two rows:  Today P&L | Win Rate   (top)
                 Today Trades | Markets (bottom, side by side) */
@@ -287,8 +284,7 @@
     grid-template-areas:
       "pnl    wr"
       "trades markets";
-    gap: 1px;
-    background: var(--border);
+    gap: 16px;
   }
   .stats .stat-card:nth-child(1) { grid-area: trades; }   /* Today Trades */
   .stats .stat-card:nth-child(2) { grid-area: wr; }       /* Win Rate */
@@ -297,6 +293,8 @@
   .stat-card {
     background: var(--card);
     padding: 18px 24px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
   }
   .stat-label {
     font-size: 10px;
@@ -315,8 +313,7 @@
   .pnl-row {
     display: flex;
     gap: 16px;
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
+    padding: 16px 24px 0;
   }
   .pnl-half {
     flex: 1 1 0;
@@ -340,6 +337,10 @@
     gap: 8px;
     margin-bottom: 10px;
   }
+  /* Portfolio title doubles as a link to the Polymarket account profile. */
+  a.portfolio-link { text-decoration: none; color: var(--text-dim); transition: color 0.15s ease; }
+  a.portfolio-link:hover { color: var(--accent); }
+  .portfolio-link-icon { font-size: 11px; opacity: 0.75; }
   .portfolio-avail { text-align: right; }
   .portfolio-avail-label {
     font-size: 10px;
@@ -454,7 +455,7 @@
   .chart-wrap { flex: 1; position: relative; min-height: 120px; }
 
   /* ── BTC 5m candlestick chart (full width, below the stats/P&L row) ── */
-  .btc-chart-card { border-bottom: 1px solid var(--border); }
+  .btc-chart-card { border: 1px solid var(--border); border-radius: 12px; }
   .btc-chart-card .chart-wrap { height: 460px; flex: none; }
   /* Target readout below the title, in yellow — replaces the label that used
      to float on the dashed price line itself. */
@@ -531,8 +532,14 @@
     opacity: 0.9;
   }
 
-  /* ── Section ─────────────────────────────── */
-  .section { border-bottom: 1px solid var(--border); }
+  /* ── Section — standalone bordered card (matches Portfolio/Profit-Loss).
+     overflow:hidden clips the header background + tables to the rounded
+     corners, and keeps the mobile collapse height-animation contained. ── */
+  .section {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
   .section-header {
     display: flex;
     align-items: center;
@@ -613,14 +620,17 @@
       "chart      history"
       "positions  positions"
       "poshistory poshistory";
-    border-bottom: 1px solid var(--border);
+    gap: 16px;
+    padding: 16px 24px;
   }
-  .main-row > .btc-chart-card { grid-area: chart; border-right: 1px solid var(--border); min-width: 0; }
+  /* Each cell is now a standalone bordered card (see .section / .btc-chart-card);
+     the grid `gap` provides the separation the old edge borders used to. */
+  .main-row > .btc-chart-card { grid-area: chart; min-width: 0; }
   /* Height is matched to the chart card in JS (see syncHistoryHeightToChart),
      not CSS — desktop only, applied/removed there based on viewport width. */
   .main-row > .live-log-section { grid-area: history; min-width: 0; }
-  .main-row > .open-positions-section { grid-area: positions; border-top: 1px solid var(--border); min-width: 0; }
-  .main-row > .position-history-section { grid-area: poshistory; border-top: 1px solid var(--border); min-width: 0; }
+  .main-row > .open-positions-section { grid-area: positions; min-width: 0; }
+  .main-row > .position-history-section { grid-area: poshistory; min-width: 0; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
@@ -656,10 +666,12 @@
        Named grid areas don't apply on a single column, so fall back to
        plain top-to-bottom stacking via `order` on each section. */
     .main-row { grid-template-columns: 1fr; grid-template-areas: none; }
-    .main-row > .btc-chart-card { grid-area: auto; order: 1; border-right: none; border-bottom: 1px solid var(--border); }
-    .main-row > .open-positions-section { grid-area: auto; order: 2; border-top: none; border-bottom: 1px solid var(--border); }
-    .main-row > .position-history-section { grid-area: auto; order: 3; border-top: none; border-bottom: 1px solid var(--border); }
-    .main-row > .live-log-section { grid-area: auto; order: 4; border-bottom: 1px solid var(--border); }
+    /* Single column: keep the desktop card borders, just reorder. The grid
+       `gap` provides vertical spacing, so no per-section edge borders here. */
+    .main-row > .btc-chart-card { grid-area: auto; order: 1; }
+    .main-row > .open-positions-section { grid-area: auto; order: 2; }
+    .main-row > .position-history-section { grid-area: auto; order: 3; }
+    .main-row > .live-log-section { grid-area: auto; order: 4; }
     /* JS only measures/applies the matched height above 768px (see
        syncHistoryHeightToChart) and clears the inline style below it, so no
        CSS override is needed here — this comment just documents why. */
@@ -793,7 +805,10 @@
   <!-- Left: Portfolio balance -->
   <div class="pnl-half">
     <div class="portfolio-header">
-      <span class="pnl-title"><span class="pnl-dot"></span>Portfolio</span>
+      <a class="pnl-title portfolio-link" href="https://polymarket.com/@0xsamisadvme50"
+         target="_blank" rel="noopener" title="在 Polymarket 查看账户">
+        <span class="pnl-dot"></span>Portfolio<span class="portfolio-link-icon">↗</span>
+      </a>
       <div class="portfolio-avail">
         <div class="portfolio-avail-label">Available to trade</div>
         <div class="portfolio-avail-value" id="portfolioAvail">$0.00</div>

@@ -21,6 +21,10 @@ load_dotenv()
 PRIVATE_KEY: str = os.getenv("PRIVATE_KEY", "")
 POLYMARKET_HOST: str = "https://clob.polymarket.com"
 GAMMA_HOST: str = "https://gamma-api.polymarket.com"
+# Powers polymarket.com's own Profit/Loss widget — the dashboard reads its
+# cumulative P&L series from here (live mode) so the curve/number match the
+# site exactly instead of drifting from a locally-recomputed figure.
+USER_PNL_HOST: str = "https://user-pnl-api.polymarket.com"
 CHAIN_ID: int = 137  # Polygon mainnet
 
 # Polymarket wraps most accounts (browser-wallet connect, email/Magic login,
