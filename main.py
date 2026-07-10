@@ -143,6 +143,11 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     state = get_state()
     if state.position_for_market(market_id):
         return
+    # Dashboard pause switch (web/server.py, password-gated) — blocks new
+    # entries only; check_early_exits/resolve_expired_positions/reconcile in
+    # the main loop keep managing already-open positions regardless.
+    if web_server.is_trading_paused():
+        return
 
     # ── Strategy 1: BTC momentum deceleration confirmation ────────────────
     # Every ~2s the loop re-enters here for any market with a pending signal.
@@ -476,6 +481,7 @@ def _build_web_state() -> dict:
         "btc_history": btc_price.get_chart_series(),
         "btc_target": round(btc_target, 2) if btc_target is not None else None,
         "paper_trading": PAPER_TRADING,
+        "trading_paused": web_server.is_trading_paused(),
         "account_balance": state.balance if PAPER_TRADING else _wallet_balance,
         "markets_count": len(get_active_markets()),
         "today": {

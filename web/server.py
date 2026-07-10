@@ -31,6 +31,16 @@ _state: dict = {}
 _log_buffer: deque = deque(maxlen=_MAX_LOG_LINES)
 _ws_clients: set[web.WebSocketResponse] = set()
 
+# Password-gated pause switch for new trade entries — main.py's evaluate_market()
+# checks is_trading_paused() and skips opening new positions while true. Existing
+# open positions are unaffected: stop-loss/force-exit/reconciliation keep running
+# regardless, since those manage risk already taken on, not new entries.
+_trading_paused: bool = False
+
+
+def is_trading_paused() -> bool:
+    return _trading_paused
+
 # Log lines are persisted to MySQL off the hot path: emit() enqueues here and a
 # daemon thread drains it, so a slow/unavailable DB never blocks the event loop
 # or the logging caller.
@@ -152,6 +162,30 @@ async def _handle_api_strategy_links(request: web.Request) -> web.Response:
     return web.json_response(links)
 
 
+async def _handle_api_trading_toggle(request: web.Request) -> web.Response:
+    """
+    Password-gated pause/resume toggle for new trade entries (see
+    _trading_paused above). The password is a fixed value from config,
+    compared with hmac.compare_digest to avoid a timing side-channel.
+    """
+    import hmac
+    from config import TRADING_CONTROL_PASSWORD
+
+    global _trading_paused
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求格式错误"}, status=400)
+
+    password = str(body.get("password", ""))
+    if not TRADING_CONTROL_PASSWORD or not hmac.compare_digest(password, TRADING_CONTROL_PASSWORD):
+        return web.json_response({"error": "密码错误"}, status=401)
+
+    _trading_paused = not _trading_paused
+    log.info(f"[控制] 交易已{'暂停' if _trading_paused else '恢复'}（网页密码校验通过）")
+    return web.json_response({"paused": _trading_paused})
+
+
 async def _handle_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -229,6 +263,7 @@ async def start_web_server() -> None:
     app.router.add_get("/api/price", _handle_api_price)
     app.router.add_get("/api/optimizations", _handle_api_optimizations)
     app.router.add_get("/api/strategy_links", _handle_api_strategy_links)
+    app.router.add_post("/api/trading/toggle", _handle_api_trading_toggle)
     app.router.add_get("/ws", _handle_ws)
     app.router.add_static("/static/", _STATIC_DIR)
 

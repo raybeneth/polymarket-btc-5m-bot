@@ -54,6 +54,12 @@ PUSD_CONTRACT_ADDRESS: str = os.getenv(
 PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+# Dashboard "pause/resume trading" button (web/server.py's /api/trading/toggle)
+# is gated on this fixed password — new trade entries stop while paused, but
+# existing open positions still get managed (stop-loss/force-exit/reconcile).
+# Left blank by default so the endpoint always rejects until explicitly set.
+TRADING_CONTROL_PASSWORD: str = os.getenv("TRADING_CONTROL_PASSWORD", "")
+
 
 # ──────────────────────────────────────────────
 # MYSQL — position storage

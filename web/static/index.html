@@ -174,7 +174,7 @@
   /* ── Stats grid — four standalone bordered cards, same look as the
      Portfolio/Profit-Loss blocks above ─────────────────────────────── */
   .stats-row {
-    padding: 16px 24px 0;
+    padding: 16px 10px 0;
   }
   /* Two rows:  Today P&L | Win Rate   (top)
                 Today Trades | Markets (bottom, side by side) */
@@ -253,9 +253,12 @@
   .portfolio-avail-value { font-size: 15px; font-weight: 700; margin-top: 2px; }
   .portfolio-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
   .portfolio-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 14px; }
+  /* Deposit / Withdraw / pause-resume all share one row now — Deposit stays
+     the primary action (wider), Withdraw and the pause toggle are narrower
+     and equal-width, so adding the toggle doesn't grow the card's height. */
   .portfolio-actions { display: flex; gap: 10px; margin-top: auto; }
-  .portfolio-actions a {
-    flex: 1;
+  .portfolio-actions a,
+  .btn-trading-toggle {
     text-align: center;
     padding: 11px 0;
     border-radius: 8px;
@@ -265,14 +268,61 @@
     text-decoration: none;
     cursor: pointer;
   }
-  .btn-deposit { background: #2d6cdf; color: #fff; }
+  .btn-deposit { flex: 1.6; background: #2d6cdf; color: #fff; }
   .btn-deposit:hover { background: #3b78e6; }
   .btn-withdraw {
+    flex: 1;
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text);
   }
   .btn-withdraw:hover { border-color: var(--text-dim); }
+
+  /* Password-gated pause/resume switch — same width as Withdraw, sitting
+     right next to it. Neutral by default; flips to a red "paused" state
+     once active so it's obvious at a glance that new trades are held back. */
+  .btn-trading-toggle {
+    flex: 1;
+    letter-spacing: 0.3px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-trading-toggle:hover { border-color: var(--text-dim); }
+  .btn-trading-toggle.paused {
+    background: rgba(239, 83, 80, 0.15);
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .btn-trading-toggle.paused:hover { background: rgba(239, 83, 80, 0.25); }
+
+  /* Password prompt for the pause/resume toggle — reuses the shared .modal-* base. */
+  .pause-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+  }
+  .pause-input:focus { outline: none; border-color: var(--accent); }
+  .pause-error { color: var(--red); font-size: 11px; margin-top: 8px; min-height: 14px; }
+  .pause-confirm {
+    margin-top: 12px;
+    width: 100%;
+    padding: 10px 0;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #0f1a20;
+    border: none;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .pause-confirm:hover { background: #2fc0b2; }
 
   /* Right block — Profit/Loss chart. Watermark echoing Polymarket's widget. */
   .pnl-watermark {
@@ -523,7 +573,7 @@
       "positions  positions"
       "poshistory poshistory";
     gap: 16px;
-    padding: 16px 24px;
+    padding: 16px 10px;
   }
   /* Each cell is now a standalone bordered card (see .section / .btc-chart-card);
      the grid `gap` provides the separation the old edge borders used to. */
@@ -664,6 +714,22 @@
   </div>
 </div>
 
+<!-- Password prompt for the pause/resume trading toggle -->
+<div class="modal-overlay" id="pauseModal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span class="modal-title" id="pauseModalTitle">Stop</span>
+      <button class="modal-close" id="pauseModalClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body" style="white-space: normal;">
+      <p style="margin-bottom: 10px; color: var(--text-dim); font-size: 11.5px;">请输入密码确认操作</p>
+      <input type="password" class="pause-input" id="pauseModalInput" placeholder="密码" autocomplete="off">
+      <div class="pause-error" id="pauseModalError"></div>
+      <button class="pause-confirm" id="pauseModalConfirm" type="button">确认</button>
+    </div>
+  </div>
+</div>
+
 <!-- Portfolio (left) + cumulative Profit/Loss (right), two 50% bordered blocks
      styled after Polymarket's own account widget. -->
 <div class="pnl-row">
@@ -685,6 +751,7 @@
     <div class="portfolio-actions">
       <a class="btn-deposit" href="https://polymarket.com/portfolio" target="_blank" rel="noopener">Deposit</a>
       <a class="btn-withdraw" href="https://polymarket.com/portfolio" target="_blank" rel="noopener">Withdraw</a>
+      <button class="btn-trading-toggle" id="tradingToggleBtn" type="button">Stop</button>
     </div>
   </div>
 
@@ -1571,6 +1638,13 @@ function render(d) {
     modeEl.className = 'mode-badge' + (d.paper_trading ? '' : ' live');
   }
 
+  // Pause/resume toggle — reflect the server's actual state (in case another
+  // client toggled it, or on first load/reconnect) rather than assuming.
+  if (d.trading_paused != null && d.trading_paused !== _tradingPaused) {
+    _tradingPaused = d.trading_paused;
+    _updateTradingToggleBtn();
+  }
+
   // Uptime
   if (d.uptime != null) {
     const h = Math.floor(d.uptime / 3600);
@@ -1742,10 +1816,60 @@ async function loadOptimizations() {
 }
 loadOptimizations();
 
-// Unified Escape: close the doc modal if open.
+// ── Trading pause/resume (password-gated) ─────────────────
+let _tradingPaused = false;
+const pauseModal = $('pauseModal');
+const tradingToggleBtn = $('tradingToggleBtn');
+
+function _updateTradingToggleBtn() {
+  if (!tradingToggleBtn) return;
+  tradingToggleBtn.textContent = _tradingPaused ? 'Start' : 'Stop';
+  tradingToggleBtn.classList.toggle('paused', _tradingPaused);
+}
+
+function openPauseModal() {
+  $('pauseModalTitle').textContent = _tradingPaused ? 'Start' : 'Stop';
+  $('pauseModalInput').value = '';
+  $('pauseModalError').textContent = '';
+  pauseModal.classList.add('open');
+  $('pauseModalInput').focus();
+}
+function closePauseModal() { pauseModal.classList.remove('open'); }
+
+tradingToggleBtn.addEventListener('click', openPauseModal);
+$('pauseModalClose').addEventListener('click', closePauseModal);
+pauseModal.addEventListener('click', e => { if (e.target === pauseModal) closePauseModal(); });
+
+async function submitPauseToggle() {
+  const password = $('pauseModalInput').value;
+  const errEl = $('pauseModalError');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/api/trading/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      errEl.textContent = data.error || '操作失败';
+      return;
+    }
+    _tradingPaused = !!data.paused;
+    _updateTradingToggleBtn();
+    closePauseModal();
+  } catch (e) {
+    errEl.textContent = '网络错误，请重试';
+  }
+}
+$('pauseModalConfirm').addEventListener('click', submitPauseToggle);
+$('pauseModalInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitPauseToggle(); });
+
+// Unified Escape: close whichever modal is open.
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (docModal.classList.contains('open')) closeDoc();
+  else if (pauseModal.classList.contains('open')) closePauseModal();
 });
 
 // Mobile: tap a section header (Position History / Open Positions / Live Log)
