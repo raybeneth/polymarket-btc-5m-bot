@@ -311,11 +311,77 @@
   .negative { color: var(--red); }
   .neutral  { color: var(--text); }
 
-  /* ── Profit/Loss history card (cumulative, all positions) ──────── */
-  .pnl-card {
-    background: var(--card);
+  /* ── Portfolio + Profit/Loss row (two 50% bordered blocks, Polymarket style) ── */
+  .pnl-row {
+    display: flex;
+    gap: 16px;
+    padding: 16px 24px;
     border-bottom: 1px solid var(--border);
-    padding: 16px 24px 4px;
+  }
+  .pnl-half {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  @media (max-width: 768px) {
+    .pnl-row { flex-direction: column; }
+  }
+
+  /* Left block — Portfolio / balance */
+  .portfolio-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .portfolio-avail { text-align: right; }
+  .portfolio-avail-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .portfolio-avail-value { font-size: 15px; font-weight: 700; margin-top: 2px; }
+  .portfolio-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .portfolio-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 14px; }
+  .portfolio-actions { display: flex; gap: 10px; margin-top: auto; }
+  .portfolio-actions a {
+    flex: 1;
+    text-align: center;
+    padding: 11px 0;
+    border-radius: 8px;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .btn-deposit { background: #2d6cdf; color: #fff; }
+  .btn-deposit:hover { background: #3b78e6; }
+  .btn-withdraw {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-withdraw:hover { border-color: var(--text-dim); }
+
+  /* Right block — Profit/Loss chart. Watermark echoing Polymarket's widget. */
+  .pnl-watermark {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-dim);
+    opacity: 0.5;
+    letter-spacing: 0.5px;
+    pointer-events: none;
   }
   .pnl-header {
     display: flex;
@@ -720,24 +786,48 @@
   </div>
 </div>
 
-<!-- Cumulative Profit/Loss (all positions), styled after Polymarket's own P&L widget -->
-<div class="pnl-card">
-  <div class="pnl-header">
-    <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
-    <div class="pnl-ranges" id="pnlRanges">
-      <button type="button" data-range="1D">1D</button>
-      <button type="button" data-range="1W">1W</button>
-      <button type="button" data-range="1M">1M</button>
-      <button type="button" data-range="1Y">1Y</button>
-      <button type="button" data-range="YTD">YTD</button>
-      <button type="button" data-range="ALL" class="active">ALL</button>
+<!-- Portfolio (left) + cumulative Profit/Loss (right), two 50% bordered blocks
+     styled after Polymarket's own account widget. -->
+<div class="pnl-row">
+
+  <!-- Left: Portfolio balance -->
+  <div class="pnl-half">
+    <div class="portfolio-header">
+      <span class="pnl-title"><span class="pnl-dot"></span>Portfolio</span>
+      <div class="portfolio-avail">
+        <div class="portfolio-avail-label">Available to trade</div>
+        <div class="portfolio-avail-value" id="portfolioAvail">$0.00</div>
+      </div>
+    </div>
+    <div class="portfolio-balance" id="portfolioBalance">$0.00</div>
+    <div class="portfolio-sub" id="portfolioSub">&nbsp;</div>
+    <div class="portfolio-actions">
+      <a class="btn-deposit" href="https://polymarket.com/portfolio" target="_blank" rel="noopener">Deposit</a>
+      <a class="btn-withdraw" href="https://polymarket.com/portfolio" target="_blank" rel="noopener">Withdraw</a>
     </div>
   </div>
-  <div class="pnl-balance" id="pnlBalance">$0.00</div>
-  <div class="pnl-sub" id="pnlSub">&nbsp;</div>
-  <div class="pnl-chart-wrap">
-    <div id="pnlChart" style="width:100%;height:100%"></div>
+
+  <!-- Right: Profit/Loss chart -->
+  <div class="pnl-half">
+    <div class="pnl-header">
+      <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
+      <div class="pnl-ranges" id="pnlRanges">
+        <button type="button" data-range="1D">1D</button>
+        <button type="button" data-range="1W">1W</button>
+        <button type="button" data-range="1M">1M</button>
+        <button type="button" data-range="1Y">1Y</button>
+        <button type="button" data-range="YTD">YTD</button>
+        <button type="button" data-range="ALL" class="active">ALL</button>
+      </div>
+    </div>
+    <div class="pnl-balance" id="pnlBalance">$0.00</div>
+    <div class="pnl-sub" id="pnlSub">&nbsp;</div>
+    <div class="pnl-chart-wrap">
+      <div id="pnlChart" style="width:100%;height:100%"></div>
+      <span class="pnl-watermark">Polymarket</span>
+    </div>
   </div>
+
 </div>
 
 <!-- Stats grid -->
@@ -1292,14 +1382,16 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
   });
 }
 
-// ── Cumulative Profit/Loss chart (all positions), Polymarket-widget style ──
-// The big number and the curve are deliberately decoupled:
-//   - Big number = the real-time wallet balance (live mode: on-chain pUSD
-//     balance; paper mode: the simulated ledger) — never derived from
+// ── Portfolio + cumulative Profit/Loss widget, Polymarket style (two blocks) ──
+// The balance and the P&L curve are deliberately decoupled across the two blocks:
+//   - Left "Portfolio" block = the real-time wallet balance (live mode: on-chain
+//     pUSD balance; paper mode: the simulated ledger) — never derived from
 //     position P&L math, so it can't drift from what's actually in the wallet.
-//   - Curve = pure cumulative per-position P&L from zero, independent of the
-//     account balance — a "trading performance" line, unaffected by
-//     deposits/withdrawals or whatever the wallet balance is doing.
+//     Its "past day" sub-line comes from the last 24h of the P&L curve.
+//   - Right "Profit/Loss" block = pure cumulative per-position P&L from zero,
+//     independent of the account balance — a "trading performance" line,
+//     unaffected by deposits/withdrawals. Its big number is the P&L accumulated
+//     within the selected range (or the hovered curve point).
 let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
@@ -1310,6 +1402,11 @@ let _balanceStale = false;    // true when the latest payload's account_balance 
                                // (live-mode wallet query failed) — last known value is kept
 
 const PNL_RANGE_SECONDS = { '1D': 86400, '1W': 7 * 86400, '1M': 30 * 86400, '1Y': 365 * 86400 };
+const PNL_RANGE_LABEL = { '1D': 'Past Day', '1W': 'Past Week', '1M': 'Past Month', '1Y': 'Past Year', 'YTD': 'Year to Date', 'ALL': 'All Time' };
+
+function _fmtUsd(v) {
+  return '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function _pnlRangeCutoff(range) {
   if (range === 'ALL') return 0;
@@ -1387,50 +1484,65 @@ function initPnlChart() {
 // With (value, time): hovering shows that curve point's raw P&L instead —
 // a signed change, not a balance.
 function _renderPnlHeadline(hoverValue, hoverTime) {
-  const balEl = $('pnlBalance'), subEl = $('pnlSub');
-  if (!balEl || !subEl) return;
-
-  // No real wallet balance has ever arrived yet (e.g. live-mode on-chain
-  // query hasn't completed its first poll) — show a neutral placeholder
-  // instead of a misleading $0.00 or a stale hardcoded figure.
-  if (!_balanceLoaded && hoverValue == null) {
-    balEl.textContent = '--';
-    balEl.className = 'pnl-balance neutral';
-    subEl.textContent = '等待钱包余额加载...';
-    return;
+  // ── Right block: Profit/Loss (the P&L amount + curve) ──
+  const pnlEl = $('pnlBalance'), pnlSubEl = $('pnlSub');
+  if (pnlEl && pnlSubEl) {
+    if (hoverValue != null) {
+      // Hovering a chart point → show that point's raw cumulative P&L.
+      pnlEl.textContent = (hoverValue >= 0 ? '+' : '-') + _fmtUsd(hoverValue);
+      pnlEl.className = 'pnl-balance ' + (hoverValue >= 0 ? 'positive' : 'negative');
+      const d = new Date(hoverTime * 1000);
+      pnlSubEl.textContent = d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } else {
+      // Net cumulative P&L accumulated within the selected range.
+      const cutoff = _pnlRangeCutoff(_pnlRange);
+      const before = _pnlFullSeries.filter(p => p.t < cutoff);
+      const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
+      const startVal = before.length ? before[before.length - 1].v : 0;
+      const endVal = inRange.length ? inRange[inRange.length - 1].v : startVal;
+      const change = endVal - startVal;
+      pnlEl.textContent = (change >= 0 ? '+' : '-') + _fmtUsd(change);
+      pnlEl.className = 'pnl-balance ' + (change >= 0 ? 'positive' : 'negative');
+      pnlSubEl.textContent = _pnlFullSeries.length
+        ? (PNL_RANGE_LABEL[_pnlRange] || _pnlRange)
+        : 'No closed trades yet';
+    }
   }
 
-  if (hoverValue != null) {
-    balEl.textContent = (hoverValue >= 0 ? '+' : '') + '$' + hoverValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    balEl.className = 'pnl-balance ' + (hoverValue >= 0 ? 'positive' : 'negative');
-    const d = new Date(hoverTime * 1000);
-    subEl.textContent = d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-    return;
+  // ── Left block: Portfolio balance (static — unaffected by chart hover) ──
+  const balEl = $('portfolioBalance'), balSubEl = $('portfolioSub'), availEl = $('portfolioAvail');
+  if (balEl) {
+    // No real wallet balance has arrived yet (e.g. live-mode on-chain query
+    // hasn't completed its first poll) — neutral placeholder over a stale $0.00.
+    if (!_balanceLoaded) {
+      balEl.textContent = '--';
+      balEl.className = 'portfolio-balance neutral';
+      if (availEl) availEl.textContent = '--';
+      if (balSubEl) balSubEl.textContent = '等待钱包余额加载...';
+    } else {
+      const balStr = '$' + _accountBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      balEl.textContent = balStr;
+      balEl.className = 'portfolio-balance neutral';
+      if (availEl) availEl.textContent = balStr;
+      if (balSubEl) {
+        if (_balanceStale) {
+          // Latest poll failed (live mode) — the figure above is last known-good.
+          balSubEl.innerHTML = '<span class="negative">⚠ 钱包余额获取失败，当前为上次已知值</span>';
+        } else {
+          // "Past day" change, derived from the last 24h of the P&L curve.
+          const dayCut = Math.floor(Date.now() / 1000) - 86400;
+          const before = _pnlFullSeries.filter(p => p.t < dayCut);
+          const startVal = before.length ? before[before.length - 1].v : 0;
+          const endVal = _pnlFullSeries.length ? _pnlFullSeries[_pnlFullSeries.length - 1].v : 0;
+          const dayChange = endVal - startVal;
+          const base = _accountBalance - dayChange;
+          const pct = base > 0 ? (dayChange / base * 100) : 0;
+          const cls = dayChange >= 0 ? 'positive' : 'negative';
+          balSubEl.innerHTML = `<span class="${cls}">${dayChange >= 0 ? '+' : '-'}$${Math.abs(dayChange).toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span> past day`;
+        }
+      }
+    }
   }
-
-  balEl.textContent = '$' + _accountBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  balEl.className = 'pnl-balance neutral';
-
-  // Latest poll failed to fetch a real balance (live mode only) — the number
-  // shown above is the last known-good value, not a live one. Say so instead
-  // of silently looking current.
-  if (_balanceStale) {
-    subEl.innerHTML = '<span class="negative">⚠ 钱包余额获取失败，当前为上次已知值</span>';
-    return;
-  }
-
-  // Sub-line: net change in cumulative P&L over the selected range — purely
-  // from the P&L curve, unrelated to the wallet balance shown above.
-  const cutoff = _pnlRangeCutoff(_pnlRange);
-  const before = _pnlFullSeries.filter(p => p.t < cutoff);
-  const inRange = _pnlFullSeries.filter(p => p.t >= cutoff);
-  const startVal = before.length ? before[before.length - 1].v : 0;
-  const endVal = inRange.length ? inRange[inRange.length - 1].v : startVal;
-  const change = endVal - startVal;
-  const changeCls = change >= 0 ? 'positive' : 'negative';
-  subEl.innerHTML = inRange.length
-    ? `<span class="${changeCls}">${change >= 0 ? '+' : ''}$${change.toFixed(2)}</span> (${_pnlRange})`
-    : 'No closed trades in this range';
 }
 
 // Lightweight Charts only ever draws straight segments between the points you
