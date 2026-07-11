@@ -197,25 +197,17 @@
     padding: 2px 12px; color: var(--text-dim);
   }
 
-  /* ── Stats grid — four standalone bordered cards, same look as the
+  /* ── Stats grid — standalone bordered cards, same look as the
      Portfolio/Profit-Loss blocks above ─────────────────────────────── */
   .stats-row {
     padding: 16px 10px 0;
   }
-  /* Two rows:  Today P&L | Win Rate   (top)
-                Today Trades | Markets (bottom, side by side) */
+  /* Today Trades | Today P&L, side by side */
   .stats {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "pnl    wr"
-      "trades markets";
     gap: 16px;
   }
-  .stats .stat-card:nth-child(1) { grid-area: trades; }   /* Today Trades */
-  .stats .stat-card:nth-child(2) { grid-area: wr; }       /* Win Rate */
-  .stats .stat-card:nth-child(3) { grid-area: pnl; }      /* Today P&L */
-  .stats .stat-card:nth-child(4) { grid-area: markets; }  /* Markets */
   .stat-card {
     background: var(--card);
     padding: 18px 24px;
@@ -268,7 +260,7 @@
   /* Portfolio title doubles as a link to the Polymarket account profile. */
   a.portfolio-link { text-decoration: none; color: var(--text-dim); transition: color 0.15s ease; }
   a.portfolio-link:hover { color: var(--accent); }
-  .portfolio-link-icon { font-size: 11px; opacity: 0.75; }
+  .portfolio-link-icon { width: 14px; height: 14px; margin-left: -1px; vertical-align: -2px; opacity: 0.85; border-radius: 50%; object-fit: cover; }
   .portfolio-avail { text-align: right; }
   .portfolio-avail-label {
     font-size: 10px;
@@ -779,7 +771,7 @@
     <div class="portfolio-header">
       <a class="pnl-title portfolio-link" href="https://polymarket.com/@0xsamisadvme50"
          target="_blank" rel="noopener" title="在 Polymarket 查看账户">
-        <span class="pnl-dot"></span>Portfolio<span class="portfolio-link-icon">↗</span>
+        <span class="pnl-dot"></span>Portfolio<img class="portfolio-link-icon" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAMAAABF0y+mAAAAkFBMVEUWUvAMTvAAS/AARfAAPus8aekSUPAASfAATulxjeu6xvDy9vf+//hJcOibruzb4vP///z///3m6/T7/fgAR/AUVOZ6lOzBzfCXq+4AMOynuPJTd+nc5PL////u8/asvPJMc+eDnOgANuzJ1PEsXulef+rn7POuve5ohu4APvCDmuzS2/AsYOWQpO5zkeNzj+tSUrVuAAAA5ElEQVR4AbyRRZaFQAwAadpwCO7uev/TjXvzt5NdXr1IJdI/BnpIZEwouy3hRFE13SB/AXspMS3bAd31fkPkkyCMPAA7pkn6u5JlaQ5FqamIcOZXvyCqi6JsghbLr9lfaIIBXtf0xEdMhMWQVaNTlNPM8SLA2fdJsEYGOFujCRC9yeD6RabwbuG7kAg5x3yeSgfGNBIW2o/NAadbg6UVVHQo8jTDWGbS3RFO0mJ0cwQmXZoOkFsmeSl9hX8/QuNXiSgM3g4v/lJWpxIgtz9VhJfuR2e8VN4HevVF0sNgzwPK0RIAAINmEwPxHkscAAAAAElFTkSuQmCC" alt="Polymarket">
       </a>
       <div class="portfolio-avail">
         <div class="portfolio-avail-label">Available to trade</div>
@@ -828,19 +820,9 @@
       <div class="stat-sub">All time: <span id="allTrades">0</span></div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Win Rate</div>
-      <div class="stat-value neutral" id="winRate">0%</div>
-      <div class="stat-sub">W <span class="positive" id="wins">0</span> / L <span class="negative" id="losses">0</span> &nbsp; All: <span id="allWL">0/0</span> (<span id="allWinRate">0%</span>)</div>
-    </div>
-    <div class="stat-card">
       <div class="stat-label">Today P&amp;L</div>
       <div class="stat-value" id="todayPnl">$0.00</div>
       <div class="stat-sub">All time: <span id="allPnl">$0.00</span></div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Markets</div>
-      <div class="stat-value neutral" id="markets">0</div>
-      <div class="stat-sub">active</div>
     </div>
   </div>
 
@@ -1701,12 +1683,6 @@ function render(d) {
   // Today stats
   const today = d.today || {};
   $('todayTrades').textContent = today.trades || 0;
-  const w = today.wins || 0, l = today.losses || 0;
-  const wr = (w + l) > 0 ? Math.round(w / (w + l) * 100) : 0;
-  $('winRate').textContent = wr + '%';
-  $('winRate').className = 'stat-value ' + (wr >= 50 ? 'positive' : wr > 0 ? 'negative' : 'neutral');
-  $('wins').textContent = w;
-  $('losses').textContent = l;
   const pnl = today.pnl || 0;
   $('todayPnl').textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
   $('todayPnl').className = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
@@ -1714,16 +1690,9 @@ function render(d) {
   // All-time stats
   const all = d.all_time || {};
   $('allTrades').textContent = all.trades || 0;
-  const allW = all.wins || 0, allL = all.losses || 0;
-  $('allWL').textContent = `${allW}/${allL}`;
-  const allWr = (allW + allL) > 0 ? Math.round(allW / (allW + allL) * 100) : 0;
-  $('allWinRate').textContent = allWr + '%';
   const allPnl = all.pnl || 0;
   $('allPnl').textContent = (allPnl >= 0 ? '+' : '') + '$' + allPnl.toFixed(2);
   $('allPnl').className = allPnl >= 0 ? 'positive' : 'negative';
-
-  // Markets
-  $('markets').textContent = d.markets_count || 0;
 
   // Position history (used by the history table below)
   const history = d.history || [];
