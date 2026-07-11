@@ -38,6 +38,8 @@ from config import (
     DIRECTION_SMOOTH_WINDOW,
     DIRECTION_VOL_SIGMA_FULL,
     DIRECTION_VOL_FLOOR_PCT,
+    DIRECTION_MIN_RAW_MOVE_PCT,
+    DIRECTION_MIN_MOMENTUM_ABS,
     DIRECTION_CONSISTENCY_WINDOW,
     DIRECTION_REVERSAL_GUARD_WINDOW,
 )
@@ -58,7 +60,8 @@ _score_history: deque = deque(maxlen=200)
 # periodically and resets this via get_and_reset_skip_stats().
 # ─────────────────────────────────────────────
 _skip_stats: dict = {
-    "neutral": 0, "noise_skip": 0, "weak_skip": 0, "low": 0, "med": 0, "high": 0, "reversal_guard": 0,
+    "neutral": 0, "noise_skip": 0, "weak_skip": 0, "low": 0, "med": 0, "high": 0,
+    "reversal_guard": 0, "momentum_floor": 0,
 }
 
 
@@ -157,6 +160,20 @@ def _compute_momentum_score() -> tuple[float, dict]:
 
     # Combine crossover and total move into a single % move signal
     combined_move_pct = 0.6 * crossover_pct + 0.4 * total_move_pct
+
+    # Below this raw-move floor, the market is genuinely flat — don't run
+    # vol-adaptive scaling at all. Realised vol collapses toward
+    # DIRECTION_VOL_FLOOR_PCT in a flat tape, which makes the denominator
+    # tiny and would otherwise amplify this noise-level wobble into a large
+    # normalised score (the exact opposite of what the flat-tape floor
+    # should do). Report a flat 0.0 instead.
+    if abs(combined_move_pct) < DIRECTION_MIN_RAW_MOVE_PCT:
+        return 0.0, {
+            "combined_move_pct": round(combined_move_pct, 4),
+            "momentum_score": 0.0,
+            "reason": "below raw-move floor, vol-adaptive scaling skipped",
+            "samples": len(prices_raw),
+        }
 
     # Volatility-adaptive scaling: full scale = SIGMA_FULL horizon-sigmas.
     vol_pct = _realised_vol_pct(prices_raw)
@@ -287,6 +304,15 @@ def check(yes_book: OrderBook, no_book: OrderBook) -> FilterResult:
     """
     momentum_score, momentum_details = _compute_momentum_score()
     ob_score, ob_details = _compute_ob_imbalance_score(yes_book, no_book)
+
+    # OB imbalance alone (up to ±100 * 0.35 = 35, above DIRECTION_MIN_SCORE=20)
+    # must not be able to manufacture a signal on a flat tape — it can only
+    # amplify/confirm a real momentum read. Below the floor, momentum is
+    # deemed too trivial for OB to act on, so OB's contribution is suppressed.
+    if abs(momentum_score) < DIRECTION_MIN_MOMENTUM_ABS:
+        ob_score = 0.0
+        ob_details["note"] = "OB suppressed — momentum below floor, cannot solo-create signal"
+        record_skip("momentum_floor")
 
     # Weighted combination (instantaneous)
     combined = (

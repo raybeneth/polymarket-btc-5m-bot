@@ -670,16 +670,19 @@ async def main_loop() -> None:
                 del _target_cache[k]
 
             # Periodic funnel stats (NEUTRAL/noise/weak/reversal skips + tier
-            # fills). Kept at log.debug — useful for trade-frequency tuning when
-            # you raise LOG_LEVEL to DEBUG, but too noisy for normal INFO runs.
+            # fills). Bumped from log.debug to log.info so this is visible
+            # under normal LOG_LEVEL=INFO production runs — needed to confirm
+            # whether new gates (e.g. momentum_floor) are actually firing,
+            # and to diagnose extended quiet periods without a LOG_LEVEL flip.
             now_ts = time.time()
             if now_ts - _last_stats_report >= STATS_REPORT_INTERVAL:
                 stats = direction.get_and_reset_skip_stats()
                 fired = stats["low"] + stats["med"] + stats["high"]
-                log.debug(
+                log.info(
                     f"方向漏斗(近{STATS_REPORT_INTERVAL/60:.0f}分钟): "
                     f"NEUTRAL={stats['neutral']} 噪声跳过={stats['noise_skip']} "
-                    f"弱信号跳过={stats['weak_skip']} 反转拦截={stats['reversal_guard']} | "
+                    f"弱信号跳过={stats['weak_skip']} 动能不足跳过={stats['momentum_floor']} "
+                    f"反转拦截={stats['reversal_guard']} | "
                     f"成交 LOW={stats['low']} MED={stats['med']} HIGH={stats['high']} (共{fired}笔)"
                 )
                 _last_stats_report = now_ts

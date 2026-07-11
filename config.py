@@ -139,12 +139,32 @@ DIRECTION_SLOW_WINDOW: int = 120       # long-term window (seconds) for slow MA
 DIRECTION_VOL_SIGMA_FULL: float = 2.5  # combined move of this many horizon-sigmas → ±100
 DIRECTION_VOL_FLOOR_PCT: float = 0.02  # min volatility scale (%) — guards flat-tape divide-by-zero
 
+# Raw-move floor for momentum normalisation. In a genuinely flat market,
+# realised vol collapses toward DIRECTION_VOL_FLOOR_PCT (0.02%), making
+# full_scale_pct tiny (2.5*0.02%=0.05%) — a ~$32-50 noise wobble on $64k BTC
+# then normalises to a FULL ±100 momentum score. Below this floor we skip
+# vol-adaptive scaling entirely and report momentum_score=0.0 instead of
+# letting the floored denominator amplify noise. Set below the vol-floor's
+# own full_scale (0.05%) so it never fires for markets with real measured
+# vol above the floor — it only catches the exact "vol clamped to floor" regime.
+DIRECTION_MIN_RAW_MOVE_PCT: float = 0.03
+
 # Direction smoothing: use average of recent scores over this window
 DIRECTION_SMOOTH_WINDOW: float = 20.0  # seconds to average direction scores over
 
 # Orderbook imbalance weight in combined direction score
 DIRECTION_OB_WEIGHT: float = 0.35     # 35% from orderbook imbalance
 DIRECTION_MOMENTUM_WEIGHT: float = 0.65  # 65% from price momentum
+
+# OB imbalance (35% weight, can reach ±100 alone) must not be able to
+# manufacture a trade signal on a flat tape. Require momentum_score itself
+# to clear this floor before OB is allowed to contribute at all — OB can only
+# amplify/confirm a real momentum read, never create one solo. 20/0.65≈30.8
+# is the momentum_score that alone clears DIRECTION_MIN_SCORE; 15 is set
+# below that deliberately — it demands "non-trivial" momentum, not "solo
+# bar-clearing" momentum, since OB is a legitimate confirming signal once
+# momentum is real.
+DIRECTION_MIN_MOMENTUM_ABS: float = 15.0
 
 # Direction consistency — measures how persistently readings agree on direction.
 # High consistency = genuine trend; low consistency = choppy/noisy.
