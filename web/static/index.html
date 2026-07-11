@@ -90,6 +90,32 @@
   .conn-dot.off { background: var(--red); }
 
 
+  /* ── Info row — independent floating card below the header, showing
+     total deposits (manually maintained, see config.py TOTAL_DEPOSITS_USD)
+     and Polymarket's own UTC clock ── */
+  .info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 12px 24px 0;
+    padding: 14px 24px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    background: var(--card);
+  }
+  .info-item { display: flex; align-items: center; gap: 8px; }
+  .info-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .info-value { font-size: 15px; font-weight: 700; color: var(--text); }
+  @media (max-width: 768px) {
+    .info-row { margin: 10px 12px 0; padding: 12px 14px; flex-wrap: wrap; gap: 8px 16px; }
+  }
+
   /* ── Modal — shared base styles (used by the optimization-record modal) ── */
   .modal-overlay {
     display: none;
@@ -702,6 +728,18 @@
       <span class="conn-dot off" id="wsDot"></span>
       <span id="wsLabel">disconnected</span>
     </div>
+  </div>
+</div>
+
+<!-- Total deposits + Polymarket's official UTC time -->
+<div class="info-row">
+  <div class="info-item">
+    <span class="info-label">Total Deposits</span>
+    <span class="info-value" id="totalDeposits">$0.00</span>
+  </div>
+  <div class="info-item">
+    <span class="info-label">UTC Time</span>
+    <span class="info-value" id="utcClock">--:--:--</span>
   </div>
 </div>
 
@@ -1627,6 +1665,11 @@ function connect() {
 
 // ── Render ─────────────────────────────────────
 function render(d) {
+  // Total deposits (manually maintained figure, see config.py TOTAL_DEPOSITS_USD)
+  if (d.total_deposits != null) {
+    $('totalDeposits').textContent = '$' + d.total_deposits.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
   // BTC
   $('btcPrice').textContent = d.btc_price
     ? '$' + d.btc_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -1885,6 +1928,18 @@ document.querySelectorAll('.section-header').forEach(h => {
 });
 
 connect();
+
+// Polymarket's own UTC clock — plain UTC, no local-timezone offset (unlike
+// the chart's _fmtUtc8Time helper, which is UTC+8 for the candle labels).
+function _tickUtcClock() {
+  const d = new Date();
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  $('utcClock').textContent = `${hh}:${mm}:${ss}`;
+}
+_tickUtcClock();
+setInterval(_tickUtcClock, 1000);
 
 // ── Fast price ticker (700ms) + smooth interpolation ────────────────
 // Polls /api/price at 700ms. Instead of jumping to the new price instantly,

@@ -43,6 +43,7 @@ from config import (
     ENTRY_MAX_WAIT_SECONDS,
     ENTRY_CONFIRM_MAX_ADVERSE_PCT,
     TIMING_MIN_REMAINING,
+    TOTAL_DEPOSITS_USD,
     TradeDecision,
 )
 from feeds import btc_price
@@ -482,6 +483,7 @@ def _build_web_state() -> dict:
         "btc_target": round(btc_target, 2) if btc_target is not None else None,
         "paper_trading": PAPER_TRADING,
         "trading_paused": web_server.is_trading_paused(),
+        "total_deposits": TOTAL_DEPOSITS_USD,
         "account_balance": state.balance if PAPER_TRADING else _wallet_balance,
         "markets_count": len(get_active_markets()),
         "today": {

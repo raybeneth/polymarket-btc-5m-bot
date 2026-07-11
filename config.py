@@ -60,6 +60,13 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 # Left blank by default so the endpoint always rejects until explicitly set.
 TRADING_CONTROL_PASSWORD: str = os.getenv("TRADING_CONTROL_PASSWORD", "")
 
+# Total USD ever deposited into the trading wallet — shown on the dashboard.
+# No Polymarket API reports this (deposits are plain on-chain transfers, not
+# an "activity" type their API tracks), so it's maintained by hand: bump this
+# in .env whenever a real deposit is made. Display only — not used in sizing/
+# risk logic.
+TOTAL_DEPOSITS_USD: float = float(os.getenv("TOTAL_DEPOSITS_USD", "0.0"))
+
 
 # ──────────────────────────────────────────────
 # MYSQL — position storage
