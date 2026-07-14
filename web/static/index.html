@@ -89,6 +89,28 @@
   .conn-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .conn-dot.off { background: var(--red); }
 
+  /* "15M AI BOT" jump button — pinned in the header's right group. Accent-
+     filled so it reads as the primary cross-dashboard link, not just another
+     status readout. */
+  .btn-15m {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #0f1a20;
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s ease;
+  }
+  .btn-15m:hover { background: #2fc0b2; }
+  .btn-15m::before { content: '\1F916'; font-size: 12px; }
+
 
   /* ── Info row — independent floating card below the header, showing
      total deposits (manually maintained, see config.py TOTAL_DEPOSITS_USD)
@@ -758,6 +780,8 @@
     <span class="mode-badge" id="mode">PAPER</span>
   </div>
   <div class="header-right">
+    <a class="btn-15m" href="https://polymarket-strategy003.aurcloud.cc/"
+       target="_blank" rel="noopener" title="跳转到 15M AI BOT">15M AI BOT</a>
     <div>
       <span class="conn-dot off" id="btcDot"></span>
       <span class="btc-price" id="btcPrice">--</span>
