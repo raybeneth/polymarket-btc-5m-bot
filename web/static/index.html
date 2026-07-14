@@ -399,7 +399,23 @@
   }
   .pnl-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
   .pnl-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 8px; }
-  .pnl-chart-wrap { height: 110px; position: relative; }
+  .pnl-chart-wrap { height: 110px; position: relative; overflow: hidden; }
+
+  /* Left-to-right "trend draws in" reveal on range switch (Polymarket-style):
+     a curtain covers the chart, the new range's data is swapped in
+     underneath while hidden (so there's no instant jump-cut), then the
+     curtain slides away to the right, uncovering the new curve from left to
+     right as if the path were being traced in. See switchPnlRange(). */
+  .pnl-reveal-mask {
+    position: absolute;
+    inset: 0;
+    background: var(--card);
+    z-index: 6;
+    pointer-events: none;
+    transform: translateX(0%);
+  }
+  .pnl-reveal-mask.pnl-reveal-animate { transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
+  .pnl-reveal-mask.pnl-reveal-open { transform: translateX(100%); }
 
   /* Polymarket-style "flip counter" — each digit sits in its own tiny reel
      (0-9 stacked vertically) and rolls to the new value via transform,
@@ -833,9 +849,10 @@
     </div>
     <div class="pnl-balance" id="pnlBalance">$0.00</div>
     <div class="pnl-sub" id="pnlSub">&nbsp;</div>
-    <div class="pnl-chart-wrap">
+    <div class="pnl-chart-wrap" id="pnlChartWrap">
       <div id="pnlChart" style="width:100%;height:100%"></div>
       <span class="pnl-watermark">Polymarket</span>
+      <div class="pnl-reveal-mask pnl-reveal-open" id="pnlRevealMask"></div>
     </div>
   </div>
 
@@ -1667,10 +1684,39 @@ function updatePnlChart(series, accountBalance) {
   applyPnlRange(_pnlRange);
 }
 
+// User-initiated range switch (1D/1W/1M/...): cover the chart with a curtain,
+// swap in the new range's data underneath it (invisible, no jump-cut), then
+// slide the curtain away left-to-right so the new trend appears to draw in
+// along its path — same feel as Polymarket's own range switch. applyPnlRange()
+// itself stays instant/flicker-free, since it also runs on every routine WS
+// tick to refresh the currently-selected range's data (no curtain there).
+function switchPnlRange(range) {
+  if (range === _pnlRange) return;
+  $('pnlRanges').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+
+  const mask = $('pnlRevealMask');
+  if (!mask) { applyPnlRange(range); return; }
+
+  // Snap the curtain fully closed with transitions off, then swap the data
+  // underneath while it's hidden.
+  mask.classList.remove('pnl-reveal-animate', 'pnl-reveal-open');
+  void mask.offsetWidth; // force layout so the "closed" state is committed before data swaps
+  applyPnlRange(range);
+
+  // Two rAFs: the first lets the browser paint the closed state (with the
+  // transition now enabled but no transform change yet), the second then
+  // triggers the transform change — guarantees the browser actually animates
+  // the slide instead of jumping straight to the end state.
+  requestAnimationFrame(() => {
+    mask.classList.add('pnl-reveal-animate');
+    requestAnimationFrame(() => mask.classList.add('pnl-reveal-open'));
+  });
+}
+
 $('pnlRanges').addEventListener('click', e => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  applyPnlRange(btn.dataset.range);
+  switchPnlRange(btn.dataset.range);
 });
 
 // Desktop only: make Live Log's visible height match the BTC chart card's
