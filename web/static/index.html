@@ -786,7 +786,6 @@
       <span class="conn-dot off" id="btcDot"></span>
       <span class="btc-price" id="btcPrice">--</span>
     </div>
-    <div id="uptime">00:00:00</div>
     <div class="ws-status">
       <span class="conn-dot off" id="wsDot"></span>
       <span id="wsLabel">disconnected</span>
@@ -1827,14 +1826,6 @@ function render(d) {
   if (d.trading_paused != null && d.trading_paused !== _tradingPaused) {
     _tradingPaused = d.trading_paused;
     _updateTradingToggleBtn();
-  }
-
-  // Uptime
-  if (d.uptime != null) {
-    const h = Math.floor(d.uptime / 3600);
-    const m = Math.floor((d.uptime % 3600) / 60);
-    const s = d.uptime % 60;
-    $('uptime').textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
   // Today stats
