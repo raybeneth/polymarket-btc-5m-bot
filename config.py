@@ -302,8 +302,18 @@ FORCE_EXIT_BEFORE_EXPIRY: int = 30    # force exit when ≤30s remain before mar
 # In parallel, a token-price adverse-move guard cancels the pending entry the
 # moment the prediction-market price drops >ENTRY_CONFIRM_MAX_ADVERSE_PCT from
 # the signal price — irrespective of BTC velocity.
-ENTRY_BTC_MAX_VELOCITY: float = 0.001        # 0.1% — BTC barely moving in 20s → enter now
+#
+# Both ENTRY_BTC_MAX_VELOCITY and ENTRY_FLAT_CONFIRM_TICKS were recalibrated
+# after a review of 55 closed positions found 12/33 stop-losses (36%, -$37.77)
+# closed within 20s of entry — every single one confirmed via Condition A on
+# the very first ~2s check. Historical vel_20s at confirmation ranged 0-0.053%
+# (p90=0.029%), meaning the old 0.1% bar never once actually filtered anything
+# — it passed on tick 1 regardless of whether BTC had genuinely settled or was
+# just pausing mid-trend before reversing. Tightened the bar AND require it to
+# hold across several consecutive checks, not a single lucky snapshot.
+ENTRY_BTC_MAX_VELOCITY: float = 0.0005       # 0.05% (was 0.1%) — demand calmer than ~90% of historical readings
 ENTRY_BTC_DECEL_RATIO: float = 0.40          # 20s rate / 60s rate < 40% → momentum peaked
+ENTRY_FLAT_CONFIRM_TICKS: int = 3            # condition A/B must hold on this many CONSECUTIVE ~2s checks before firing (resets on any failed check)
 ENTRY_MAX_WAIT_SECONDS: float = 60.0         # hard ceiling: enter regardless after this many s
 ENTRY_CONFIRM_MAX_ADVERSE_PCT: float = 0.015  # cancel if token price fell >1.5% from signal
 

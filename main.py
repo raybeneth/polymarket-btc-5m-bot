@@ -40,6 +40,7 @@ from config import (
     ACCOUNT_BALANCE_USD,
     ENTRY_BTC_MAX_VELOCITY,
     ENTRY_BTC_DECEL_RATIO,
+    ENTRY_FLAT_CONFIRM_TICKS,
     ENTRY_MAX_WAIT_SECONDS,
     ENTRY_CONFIRM_MAX_ADVERSE_PCT,
     TIMING_MIN_REMAINING,
@@ -65,8 +66,11 @@ log = logging.getLogger(__name__)
 _traded_markets: set[str] = set()
 
 # Signals pending the 45-second entry delay confirmation.
-# market_id → (signal_unix_ts, TradeDecision, original_price_at_signal)
-_pending_signals: dict[str, tuple[float, "TradeDecision", float]] = {}
+# market_id → (signal_unix_ts, TradeDecision, original_price_at_signal, flat_streak)
+# flat_streak counts CONSECUTIVE ~2s checks where _btc_entry_ready() passed —
+# reset to 0 on any check that fails, so a single lucky quiet tick mid-trend
+# can't fire entry on its own (see ENTRY_FLAT_CONFIRM_TICKS).
+_pending_signals: dict[str, tuple[float, "TradeDecision", float, int]] = {}
 
 # Historical stats (loaded once at startup)
 _history: dict = {}
@@ -159,7 +163,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     #   3. Hard ceiling: enter regardless once ENTRY_MAX_WAIT_SECONDS (60s) elapsed
     #      (prevents the market window from expiring while we wait)
     if market_id in _pending_signals:
-        signal_ts, pending_decision, original_price = _pending_signals[market_id]
+        signal_ts, pending_decision, original_price, flat_streak = _pending_signals[market_id]
         waited = time.time() - signal_ts
         side2 = pending_decision.side
 
@@ -191,17 +195,36 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
             )
             return
 
-        # Momentum check + hard ceiling
+        # Momentum check + hard ceiling. A single passing check is no longer
+        # enough — condition A/B must hold on ENTRY_FLAT_CONFIRM_TICKS
+        # CONSECUTIVE ~2s checks before we actually fire (any failed check
+        # resets the streak). Historical review: every "flat" entry across 55
+        # closed positions confirmed on the very first check (~2s), including
+        # 12 that stopped out within 20s — a single quiet tick mid-trend was
+        # being treated as "momentum has settled" when it often wasn't.
         mom_ready, mom_reason = _btc_entry_ready()
         force_enter = waited >= ENTRY_MAX_WAIT_SECONDS
-        if not mom_ready and not force_enter:
-            log.debug(
-                f"[{mid}] 等待动量 ({waited:.0f}s): {mom_reason} | "
-                f"代币变动 {price_chg_pct:+.1%}"
-            )
-            return
 
-        # Enter: momentum decelerating or max wait reached
+        if not force_enter:
+            if not mom_ready:
+                if flat_streak:
+                    _pending_signals[market_id] = (signal_ts, pending_decision, original_price, 0)
+                log.debug(
+                    f"[{mid}] 等待动量 ({waited:.0f}s): {mom_reason} | "
+                    f"代币变动 {price_chg_pct:+.1%}"
+                )
+                return
+
+            flat_streak += 1
+            if flat_streak < ENTRY_FLAT_CONFIRM_TICKS:
+                _pending_signals[market_id] = (signal_ts, pending_decision, original_price, flat_streak)
+                log.debug(
+                    f"[{mid}] 动量确认中 ({flat_streak}/{ENTRY_FLAT_CONFIRM_TICKS}, {waited:.0f}s): {mom_reason}"
+                )
+                return
+
+        # Enter: momentum decelerating for ENTRY_FLAT_CONFIRM_TICKS consecutive
+        # checks, or max wait reached.
         del _pending_signals[market_id]
         reversed_, rev_details = direction.check_reversal(side2, time.time())
         if reversed_:
@@ -213,7 +236,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         pending_decision.tick_size = book2.tick_size
         pending_decision.min_order_size = book2.min_order_size or 0.0
         pending_decision.neg_risk = bool(book2.neg_risk)
-        entry_reason = f"超时{waited:.0f}s" if force_enter else mom_reason
+        entry_reason = f"超时{waited:.0f}s" if force_enter else f"{mom_reason}，连续{flat_streak}次"
         log.info(
             f"[{mid}] 动量确认入场 ({waited:.0f}s | {entry_reason}): "
             f"代币变动 {price_chg_pct:+.1%} "
@@ -393,7 +416,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # below that, execute immediately rather than enter right before expiry.
     wait_budget = remaining - TIMING_MIN_REMAINING - 15
     if wait_budget >= 10:
-        _pending_signals[market_id] = (time.time(), decision, entry_price)
+        _pending_signals[market_id] = (time.time(), decision, entry_price, 0)
         log.info(
             f"[{mid}] 信号挂起，等待BTC动量衰减 "
             f"(剩余={remaining:.0f}s, 最长等待={min(ENTRY_MAX_WAIT_SECONDS, wait_budget):.0f}s)"
