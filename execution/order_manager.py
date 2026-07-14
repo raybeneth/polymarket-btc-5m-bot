@@ -552,10 +552,15 @@ async def check_early_exits(session) -> None:
         if not PAPER_TRADING and pos.order_id in _pending_exits:
             continue  # sell already submitted for this position, awaiting fill confirmation
         book = await fetch_order_book(session, pos.token_id)
-        if book is None or book.best_bid is None:
-            continue
+        # Snapshot the book EVERY poll (even when empty/one-sided) — captured
+        # below to both the log and position_book_snapshots. This is the
+        # diagnostic trail behind stop fills: a stop that exits far under its
+        # nominal level can then be attributed to either a real best_bid gap
+        # between two polls, or a missing book (best_bid None → no exit fires).
+        best_bid = book.best_bid if book else None
+        best_ask = book.best_ask if book else None
+        spread = book.spread if book else None
 
-        best_bid = book.best_bid
         # Use best_bid for BOTH trigger judgment and exit fill — previously
         # trigger used book.mid while exit used best_bid, which created a gap
         # of up to 10+ cents between when the stop fired and what we actually
@@ -563,25 +568,46 @@ async def check_early_exits(session) -> None:
         # so mid-triggered stops routinely exited at much worse prices than intended
         # (see docs/optimizations/011, e.g. Trade 119: mid≈0.45 triggered but
         # best_bid=0.34 on exit → extra $107 loss vs expected stop).
-        trigger_price = best_bid
         stop_delta = pos.entry_price * STOP_LOSS_RATIO
         stop_price = pos.entry_price - stop_delta
         tp_price = pos.entry_price + TAKE_PROFIT_DELTA
 
         # Check force exit before expiry
         now = time.time()
+        secs_to_expiry = int(pos.market_end_ts - now) if pos.market_end_ts > 0 else None
         force_exit = (
             pos.market_end_ts > 0
             and (pos.market_end_ts - now) <= FORCE_EXIT_BEFORE_EXPIRY
         )
 
         exit_reason = None
-        if STOP_LOSS_ENABLED and trigger_price <= stop_price:
-            exit_reason = "STOP_LOSS"
-        elif TAKE_PROFIT_ENABLED and trigger_price >= tp_price:
-            exit_reason = "TAKE_PROFIT"
-        elif force_exit:
-            exit_reason = "FORCE_EXIT"
+        if best_bid is not None:
+            trigger_price = best_bid
+            if STOP_LOSS_ENABLED and trigger_price <= stop_price:
+                exit_reason = "STOP_LOSS"
+            elif TAKE_PROFIT_ENABLED and trigger_price >= tp_price:
+                exit_reason = "TAKE_PROFIT"
+            elif force_exit:
+                exit_reason = "FORCE_EXIT"
+
+        # Diagnostic snapshot — logged AND persisted, once per poll per position.
+        triggered = exit_reason if exit_reason else ("NO_BOOK" if best_bid is None else None)
+        log.info(
+            f"BOOK {pos.side} {pos.order_id[:10]} "
+            f"bid={best_bid if best_bid is not None else '—'} "
+            f"ask={best_ask if best_ask is not None else '—'} "
+            f"stop={stop_price:.3f} tp={tp_price:.3f} entry={pos.entry_price:.3f} "
+            f"exp={secs_to_expiry if secs_to_expiry is not None else '—'}s"
+            + (f" -> {triggered}" if triggered else "")
+        )
+        _snap_ts = now
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db.insert_book_snapshot(
+                pos.order_id, pos.side, pos.entry_price, stop_price, tp_price,
+                best_bid, best_ask, spread, secs_to_expiry, triggered, _snap_ts,
+            ),
+        )
 
         if exit_reason is None:
             continue

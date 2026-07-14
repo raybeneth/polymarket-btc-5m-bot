@@ -274,6 +274,49 @@ def prune_logs(keep: int = 5000) -> None:
         conn.close()
 
 
+def insert_book_snapshot(order_id: str, side: str, entry_price: float,
+                          stop_price: Optional[float], tp_price: Optional[float],
+                          best_bid: Optional[float], best_ask: Optional[float],
+                          spread: Optional[float], secs_to_expiry: Optional[int],
+                          triggered: Optional[str], ts: float) -> None:
+    """Persist one per-poll order-book snapshot for an OPEN position (see
+    position_book_snapshots in schema.sql). Called every loop from
+    check_early_exits — keep it a single cheap INSERT."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO position_book_snapshots
+                    (order_id, side, entry_price, stop_price, tp_price,
+                     best_bid, best_ask, spread, secs_to_expiry, triggered, ts)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (order_id, side, entry_price, stop_price, tp_price,
+                 best_bid, best_ask, spread, secs_to_expiry, triggered, _to_dt(ts)),
+            )
+    finally:
+        conn.close()
+
+
+def prune_book_snapshots(keep: int = 50000) -> None:
+    """Delete all but the newest `keep` snapshot rows to bound table growth."""
+    conn = _get_pool().connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(id) AS max_id FROM position_book_snapshots")
+            row = cur.fetchone()
+            max_id = row["max_id"] if row else None
+            if max_id is None:
+                return
+            cur.execute(
+                "DELETE FROM position_book_snapshots WHERE id <= %s",
+                (max_id - keep,),
+            )
+    finally:
+        conn.close()
+
+
 def load_open_positions() -> list[OpenPosition]:
     """Reload still-OPEN positions on startup (crash/restart recovery)."""
     conn = _get_pool().connection()

@@ -70,6 +70,31 @@ CREATE TABLE IF NOT EXISTS strategy_links (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Per-poll order-book snapshot for OPEN positions — diagnostic trail behind
+-- stop-loss fills. check_early_exits writes one row every loop (~2s) for each
+-- open position, capturing the best_bid/best_ask it saw at that instant plus
+-- the nominal stop level. Lets a stop that fills far below its stop price be
+-- traced to either a real best_bid gap between two polls, or a missing/one-
+-- sided book (triggered='NO_BOOK'). `triggered` names the exit reason this
+-- snapshot fired (STOP_LOSS/TAKE_PROFIT/FORCE_EXIT), else NULL.
+CREATE TABLE IF NOT EXISTS position_book_snapshots (
+    id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    order_id       VARCHAR(80) NOT NULL,
+    side           ENUM('YES','NO') NOT NULL,
+    entry_price    DECIMAL(10,4) NOT NULL,
+    stop_price     DECIMAL(10,4) NULL,
+    tp_price       DECIMAL(10,4) NULL,
+    best_bid       DECIMAL(10,4) NULL,
+    best_ask       DECIMAL(10,4) NULL,
+    spread         DECIMAL(10,4) NULL,
+    secs_to_expiry INT NULL,
+    triggered      VARCHAR(16) NULL,
+    ts             DATETIME(3) NOT NULL,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_order_id (order_id),
+    KEY idx_ts (ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Paper-trading account balance — a single row (id=1), seeded once from
 -- ACCOUNT_BALANCE_USD on first-ever startup, then the DB is authoritative.
 -- Debited on open (by the position's usd_size), credited back (usd_size +
