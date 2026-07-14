@@ -401,6 +401,37 @@
   .pnl-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 8px; }
   .pnl-chart-wrap { height: 110px; position: relative; }
 
+  /* Polymarket-style "flip counter" — each digit sits in its own tiny reel
+     (0-9 stacked vertically) and rolls to the new value via transform,
+     instead of the text just snapping to the new number. Driven by
+     _setOdometerText(), used for the P&L headline while scrubbing the chart. */
+  .odo-digit {
+    display: inline-block;
+    position: relative;
+    overflow: hidden;
+    width: 1ch;
+    height: 1em;
+    line-height: 1;
+    vertical-align: text-bottom;
+  }
+  .odo-strip {
+    position: absolute;
+    left: 0; top: 0;
+    transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .odo-strip span {
+    display: block;
+    height: 1em;
+    line-height: 1;
+    text-align: center;
+  }
+  .odo-char {
+    display: inline-block;
+    line-height: 1;
+    vertical-align: text-bottom;
+  }
+
   /* ── Chart card ─────────────────────────── */
   .chart-card {
     background: var(--card);
@@ -1374,6 +1405,57 @@ let _balanceStale = false;    // true when the latest payload's account_balance 
 const PNL_RANGE_SECONDS = { '1D': 86400, '1W': 7 * 86400, '1M': 30 * 86400, '1Y': 365 * 86400 };
 const PNL_RANGE_LABEL = { '1D': 'Past Day', '1W': 'Past Week', '1M': 'Past Month', '1Y': 'Past Year', 'YTD': 'Year to Date', 'ALL': 'All Time' };
 
+// ── "Flip counter" digit reel (Polymarket-style) ──────────────────
+// Builds/updates a string as a row of DOM slots: digits get their own
+// 0-9 reel that rolls via CSS transform, everything else (currency sign,
+// comma, decimal point, +/-) just swaps in place. Falls back to a full
+// rebuild (no roll) whenever the string's length changes, since reel
+// position is matched by character index.
+function _makeOdoChar(ch) {
+  if (ch >= '0' && ch <= '9') {
+    const box = document.createElement('span');
+    box.className = 'odo-digit';
+    const strip = document.createElement('span');
+    strip.className = 'odo-strip';
+    for (let d = 0; d <= 9; d++) {
+      const row = document.createElement('span');
+      row.textContent = String(d);
+      strip.appendChild(row);
+    }
+    strip.style.transform = `translateY(-${ch}em)`;
+    box.appendChild(strip);
+    box.dataset.digit = ch;
+    return box;
+  }
+  const span = document.createElement('span');
+  span.className = 'odo-char';
+  span.textContent = ch;
+  return span;
+}
+
+function _setOdoChar(slot, ch) {
+  if (slot.classList.contains('odo-digit')) {
+    if (slot.dataset.digit === ch) return;
+    slot.dataset.digit = ch;
+    slot.querySelector('.odo-strip').style.transform = `translateY(-${ch}em)`;
+  } else if (slot.textContent !== ch) {
+    slot.textContent = ch;
+  }
+}
+
+function _setOdometerText(el, text) {
+  if (el.dataset.odoText === text) return;
+  if (!el.dataset.odoInit || el.dataset.odoText.length !== text.length) {
+    el.innerHTML = '';
+    for (const ch of text) el.appendChild(_makeOdoChar(ch));
+    el.dataset.odoInit = '1';
+  } else {
+    const slots = el.children;
+    for (let i = 0; i < text.length; i++) _setOdoChar(slots[i], text[i]);
+  }
+  el.dataset.odoText = text;
+}
+
 function _fmtUsd(v) {
   return '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -1400,7 +1482,12 @@ function initPnlChart() {
     },
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     rightPriceScale: { visible: false },
-    timeScale: { visible: false, borderVisible: false },
+    // minBarSpacing defaults to ~0.5px — with the spline interpolation below
+    // inflating point count up to 10x, a narrow mobile width can hit that
+    // floor before fitContent() finishes compressing, clipping the earliest
+    // part of the curve out of view (scrolling is off, so it's unrecoverable).
+    // Allow arbitrarily tight spacing so the full start-to-end trend always fits.
+    timeScale: { visible: false, borderVisible: false, minBarSpacing: 0.001 },
     crosshair: {
       horzLine: { visible: false, labelVisible: false },
       vertLine: { color: '#27a69a', width: 1, style: 3, labelVisible: false },
@@ -1459,7 +1546,7 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
   if (pnlEl && pnlSubEl) {
     if (hoverValue != null) {
       // Hovering a chart point → show that point's raw cumulative P&L.
-      pnlEl.textContent = (hoverValue >= 0 ? '+' : '-') + _fmtUsd(hoverValue);
+      _setOdometerText(pnlEl, (hoverValue >= 0 ? '+' : '-') + _fmtUsd(hoverValue));
       pnlEl.className = 'pnl-balance ' + (hoverValue >= 0 ? 'positive' : 'negative');
       const d = new Date(hoverTime * 1000);
       pnlSubEl.textContent = d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -1471,7 +1558,7 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
       const startVal = before.length ? before[before.length - 1].v : 0;
       const endVal = inRange.length ? inRange[inRange.length - 1].v : startVal;
       const change = endVal - startVal;
-      pnlEl.textContent = (change >= 0 ? '+' : '-') + _fmtUsd(change);
+      _setOdometerText(pnlEl, (change >= 0 ? '+' : '-') + _fmtUsd(change));
       pnlEl.className = 'pnl-balance ' + (change >= 0 ? 'positive' : 'negative');
       pnlSubEl.textContent = _pnlFullSeries.length
         ? (PNL_RANGE_LABEL[_pnlRange] || _pnlRange)
