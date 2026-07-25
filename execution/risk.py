@@ -4,6 +4,10 @@ Risk manager — enforces daily loss limits and prevents double-entry.
 Tracks:
   - realised P&L for the current UTC day
   - currently open position (only 1 at a time)
+
+Entry gates are MAX_CONCURRENT_POSITIONS, MAX_DAILY_LOSS_USD and available
+balance. There is deliberately no consecutive-loss circuit breaker — see the
+note in config.py next to ORDER_TYPE for why it was removed.
 """
 import time
 from dataclasses import dataclass, field
@@ -12,7 +16,6 @@ from typing import Optional
 
 from config import (
     MAX_DAILY_LOSS_USD, MAX_CONCURRENT_POSITIONS, TRADE_SIZE_USD,
-    CIRCUIT_BREAKER_CONSECUTIVE_LOSSES, CIRCUIT_BREAKER_PAUSE_SECONDS,
 )
 import logging
 
@@ -41,8 +44,6 @@ class RiskState:
     wins_today: int = 0
     losses_today: int = 0
     balance: float = 0.0  # paper-mode virtual account balance; synced from/to MySQL by callers
-    consecutive_losses: int = 0       # count of unbroken loss streak (reset on any win)
-    circuit_breaker_until: float = 0.0  # unix ts; no new entries before this time
 
     def _refresh_day(self) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -62,9 +63,6 @@ class RiskState:
             return False, f"日亏损上限已触发: {self.daily_pnl:.2f} USD"
         if trade_size_usd > 0 and self.balance < trade_size_usd:
             return False, f"余额不足: 剩余{self.balance:.2f} < 需要{trade_size_usd:.2f}"
-        if self.circuit_breaker_until > 0 and time.time() < self.circuit_breaker_until:
-            remaining_s = int(self.circuit_breaker_until - time.time())
-            return False, f"熔断中: 连续{CIRCUIT_BREAKER_CONSECUTIVE_LOSSES}亏，{remaining_s}s 后恢复"
         return True, "OK"
 
     def record_open(self, position: OpenPosition) -> None:
@@ -82,16 +80,8 @@ class RiskState:
                 self.open_positions.pop(i)
                 if pnl > 0:
                     self.wins_today += 1
-                    self.consecutive_losses = 0  # reset streak on any win
                 else:
                     self.losses_today += 1
-                    self.consecutive_losses += 1
-                    if self.consecutive_losses >= CIRCUIT_BREAKER_CONSECUTIVE_LOSSES:
-                        self.circuit_breaker_until = time.time() + CIRCUIT_BREAKER_PAUSE_SECONDS
-                        log.warning(
-                            f"熔断触发: 连续 {self.consecutive_losses} 笔亏损 — "
-                            f"暂停入场 {CIRCUIT_BREAKER_PAUSE_SECONDS:.0f}s"
-                        )
                 log.info(
                     f"平仓 {pos.side} {market_id[:12]}… "
                     f"入场={pos.entry_price:.3f} 出场={exit_price:.3f} "

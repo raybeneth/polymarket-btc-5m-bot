@@ -63,7 +63,7 @@ polymarket-btc-5m-bot/
 │
 ├── execution/                 # 执行与风控
 │   ├── order_manager.py         # 下单/撤单/止损止盈/强制平仓/链上对账（paper+live 两套路径）
-│   └── risk.py                    # 仓位状态机：日亏损上限/最大持仓数/熔断/余额记账
+│   └── risk.py                    # 仓位状态机：日亏损上限/最大持仓数/余额记账
 │
 ├── storage/                   # 持久化
 │   ├── db.py                     # 所有 MySQL 读写（连接池，同步 pymysql，异步层用 run_in_executor 包裹）
@@ -215,7 +215,7 @@ consistency≥50% 或 direction_filter_score≥25(strong_signal)  → MED   (50%
 ### 6.1 `execution/risk.py`（RiskState，进程内单例）
 - 同时最多 `MAX_CONCURRENT_POSITIONS(2)` 个仓位（当前代码逐笔顺序，实质更接近1个）。
 - 日亏损硬顶 `MAX_DAILY_LOSS_USD`，按 UTC 日切换自动重置。
-- **熔断**：连续亏损达到 `CIRCUIT_BREAKER_CONSECUTIVE_LOSSES(3)` 笔，暂停新入场 `CIRCUIT_BREAKER_PAUSE_SECONDS(300s)`。
+- **无连亏熔断**（2026-07-25 移除，见 docs/optimizations/012 与 config.py 中 `ORDER_TYPE` 上方的说明）：入场间隔平均约 138 分钟，300s 暂停在下个信号到来前早已过期，线上从未触发过一次。日亏损硬顶是唯一保留的总闸门。
 - paper模式虚拟余额记账（`balance -= usd_size` 开仓 / `balance += usd_size+pnl` 平仓），持久化到 MySQL `account_state` 表，重启不丢失。
 
 ### 6.2 `execution/order_manager.py`

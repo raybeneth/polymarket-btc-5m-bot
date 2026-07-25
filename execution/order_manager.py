@@ -34,6 +34,9 @@ from config import (
     POLYGON_RPC_URL,
     PUSD_CONTRACT_ADDRESS,
     TRADE_SIZE_USD,
+    TRADE_SIZE_WEAK_TIMING_BAND,
+    TRADE_SIZE_WEAK_TIMING_RATIO,
+    TRADE_SIZE_WEAK_TIMING_ENABLED,
     ORDER_PRICE_SLIPPAGE,
     ORDER_FILL_TIMEOUT_SECONDS,
     STOP_LOSS_ENABLED,
@@ -260,7 +263,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
     # trade_size_usd=0 here deliberately skips can_trade()'s internal balance
     # check — that check compares against state.balance, which is the paper-
     # mode simulated ledger and has no meaning in live mode. Concurrent-
-    # position / daily-loss / circuit-breaker gates still apply below.
+    # position and daily-loss gates still apply below.
     ok, reason = state.can_trade(0)
     if not ok:
         log.warning(f"[实盘] 风控拦截: {reason}")
@@ -431,8 +434,57 @@ async def _wait_for_fill(
 # Public entry point
 # ─────────────────────────────────────────────
 
+def _apply_weak_timing_ratio(decision: TradeDecision) -> None:
+    """Halve size when the fill lands in the weak entry-timing band.
+
+    Applied here, at the shared paper/live entry point, rather than next to the
+    confidence tier in main.py: sizing there is decided when the SIGNAL fires,
+    but the momentum-confirmation gate can park a signal for up to
+    ENTRY_MAX_WAIT_SECONDS before it actually fills. The band was measured on
+    seconds-to-expiry AT FILL, so it has to be evaluated at fill time to match.
+    """
+    if not TRADE_SIZE_WEAK_TIMING_ENABLED or decision.market_end_ts <= 0:
+        return
+    if getattr(decision, "_weak_timing_applied", False):
+        return                      # never compound if a decision is re-executed
+    remaining = decision.market_end_ts - time.time()
+    lo, hi = TRADE_SIZE_WEAK_TIMING_BAND
+    if not lo <= remaining < hi:
+        return
+    before = decision.trade_size_usd or TRADE_SIZE_USD
+    after = before * TRADE_SIZE_WEAK_TIMING_RATIO
+
+    # Clamp up to the market's minimum order size rather than letting the halved
+    # order get rejected. At TRADE_SIZE_USD=20 a LOW-tier position is $5, so the
+    # halved $2.50 buys <5 shares whenever entry_price>0.50 — 19 of the 25
+    # historical band positions sat above that, and _live_execute() would have
+    # skipped every one of them. Skipping is a silent side effect of an exchange
+    # limit, not a strategy decision, so the size is raised back to exactly the
+    # minimum instead. Never clamp above `before`: if even the un-halved size
+    # can't reach the minimum, leave it alone and let the existing check reject
+    # it, which is the pre-existing behaviour.
+    fill_price = (decision.entry_price if PAPER_TRADING
+                  else _round_to_tick(decision.entry_price + ORDER_PRICE_SLIPPAGE,
+                                      decision.tick_size))
+    min_size = decision.min_order_size or 0.0
+    clamped = False
+    if min_size > 0 and fill_price > 0:
+        needed = min_size * fill_price * 1.001      # margin for the 2dp rounding
+        if after < needed <= before:
+            after, clamped = needed, True
+
+    decision.trade_size_usd = after
+    decision._weak_timing_applied = True
+    log.info(
+        f"弱时段减仓 ({lo}-{hi}s 档, 剩余{remaining:.0f}s): "
+        f"${before:.2f} -> ${after:.2f}"
+        + (f" (已抬至最小下单量 {min_size:.2f} 股)" if clamped else "")
+    )
+
+
 async def execute(decision: TradeDecision) -> bool:
     """Route to paper or live execution based on config."""
+    _apply_weak_timing_ratio(decision)
     if PAPER_TRADING:
         return await _paper_execute(decision)
     return await _live_execute(decision)

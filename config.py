@@ -253,6 +253,28 @@ CHASE_MIN_FILL_SHARES: float = 30.0   # must have ≥30 shares within chase budg
 # ──────────────────────────────────────────────
 TRADE_SIZE_USD: float = float(os.getenv("TRADE_SIZE_USD", "1000.0"))  # per trade (HIGH tier = 100%)
 TRADE_SIZE_LOW_TIER_RATIO: float = 0.25  # LOW confidence tier sizing (MED tier stays 0.5, hardcoded in main.py)
+
+# Weak entry-timing band → half size. Measured over 80 settled live positions
+# (2026-07-09..07-17) by replaying each market's full trade tape: bucketing by
+# seconds-to-expiry AT FILL, every band clears its own breakeven win rate except
+# 180-200s, which settles at 52.0% against a 56.2% breakeven (-4.2pp edge):
+#
+#     band        n    breakeven    settled-win    edge
+#     0-150s      15      56.6%         80.0%     +23.4pp
+#     150-180s    21      61.1%         71.4%     +10.3pp
+#     180-200s    25      56.2%         52.0%      -4.2pp   <- this one
+#     200s+       19      59.4%         68.4%      +9.0pp
+#
+# This band was the worst P&L bucket as traded (-$59.82) but that was mostly the
+# 20% stop-loss: the longer the runway to expiry, the more chance to dip 20% and
+# get stopped. With the stop off it is only mildly negative, so it is halved
+# rather than skipped — dropping the band entirely tested WORSE on the same data
+# (+$146.48 vs +$156.33), because its post-stop contribution is slightly positive.
+TRADE_SIZE_WEAK_TIMING_BAND: tuple = (180, 200)   # seconds-to-expiry at fill
+TRADE_SIZE_WEAK_TIMING_RATIO: float = 0.5         # half size inside that band
+TRADE_SIZE_WEAK_TIMING_ENABLED: bool = (
+    os.getenv("TRADE_SIZE_WEAK_TIMING_ENABLED", "true").lower() == "true"
+)
 MAX_CONCURRENT_POSITIONS: int = 2      # only 1 open position at a time
 MAX_DAILY_LOSS_USD: float = float(os.getenv("MAX_DAILY_LOSS_USD", "10000.0"))  # halt if daily P&L drops below -this
 
@@ -317,14 +339,14 @@ ENTRY_FLAT_CONFIRM_TICKS: int = 3            # condition A/B must hold on this m
 ENTRY_MAX_WAIT_SECONDS: float = 60.0         # hard ceiling: enter regardless after this many s
 ENTRY_CONFIRM_MAX_ADVERSE_PCT: float = 0.015  # cancel if token price fell >1.5% from signal
 
-# ──────────────────────────────────────────────
-# CIRCUIT BREAKER (Strategy 5: consecutive loss pause)
-# ──────────────────────────────────────────────
-# After N consecutive losses, pause all new entries for one full candle (5 min).
-# Addresses the "loss cluster" pattern where 3-5 consecutive losses reflect a
-# market regime shift — continuing to trade in the same regime compounds losses.
-CIRCUIT_BREAKER_CONSECUTIVE_LOSSES: int = 3   # pause after this many consecutive losses
-CIRCUIT_BREAKER_PAUSE_SECONDS: float = 300.0  # pause duration in seconds (1 candle)
+# NOTE: the consecutive-loss circuit breaker (docs/optimizations/012) was removed
+# on 2026-07-25. It never fired once in production: entries average ~138 minutes
+# apart and all 35 consecutive-loss pairs in the live record were >300s apart, so
+# the 300s pause had always expired before the next signal arrived. The loss
+# clusters it targeted were an artifact of the 20% stop-loss — replaying the same
+# 80 positions with the stop off drops the worst loss streak from 10 to 4 and max
+# drawdown from -$64.86 to -$49.27 (both measured against the actual recorded
+# P&L series). MAX_DAILY_LOSS_USD is the real remaining kill switch.
 
 ORDER_TYPE: str = "GTC"               # Good Till Cancel (we cancel manually if stale)
 ORDER_FILL_TIMEOUT_SECONDS: int = 8   # cancel unfilled order after 8s
