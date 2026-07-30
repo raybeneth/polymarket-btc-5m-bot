@@ -180,7 +180,16 @@ DIRECTION_CONSISTENCY_FLOOR: float = 0.30     # <30% = pure noise → hard skip 
 # moderate signal. PAPER-25393563 (dir_score=1.9, consistency=64% → MED $5,
 # lost -4.27) is exactly this case. Requiring a small non-zero floor keeps
 # "persistent near-noise" out of MED — it falls through to LOW (25%) instead.
-DIRECTION_MED_MIN_SCORE: float = 10.0         # filter_score floor for the MED tier
+#
+# Raised 10 → 25 after reviewing live positions 116-137 (order 0x6bc8ffdf →
+# 0xdf54e8214e, the first batch under the current strategy). direction<20 there
+# went 2W/4L for -21.61, while direction>=30 went 13W/3L for +66.86 — and the
+# floor at 10 let dir=10.9 (#136, -12.30) and dir=11.5 (#127, -11.72) through
+# on the strength of timing/odds alone. odds(25%)+timing(30%) can reach 48.5
+# combined by themselves, already above MIN_COMBINED_SCORE(45), so this floor
+# is the only gate that stops a zero-direction-edge trade. See the hard-floor
+# check in main.py::evaluate_market.
+DIRECTION_MED_MIN_SCORE: float = 25.0         # filter_score floor for the MED tier
 
 # HIGH tier requires direction to be genuinely strong — not just technically
 # above the minimum. Without this floor, timing(99)+odds(90) can push
@@ -377,9 +386,14 @@ SCORE_WEIGHTS: dict = {
 }
 MIN_COMBINED_SCORE: float = 45.0      # minimum composite score (now only direction+odds+timing); lowered 55→45 since tiered sizing (LOW/MED/HIGH) now absorbs weaker signals instead of a hard skip
 MIN_SPREAD_FILTER_SCORE: float = 65.0     # hard floor: spread filter score < 65 → skip (Strategy 3: 3 losses w/ spread<65, 0 wins below 65)
-MIN_TIMING_FILTER_SCORE: float = 35.0     # hard floor: timing score < 35 → skip regardless of combined (raised from 20; data shows no wins below 46.4, losses at 14.5/20.0)
-# Strategy 2: raised threshold to 35 (was 20) and enabled by default — 2 losses
-# filtered (#127 timing=20, #136 timing=14.5), 0 wins filtered (min win=46.4).
+MIN_TIMING_FILTER_SCORE: float = 35.0     # hard floor: timing score < 35 → skip regardless of combined
+# Strategy 2 (docs/optimizations/012) raised this 20 → 35 and enabled it by
+# default. NOTE: that doc cited "#127 timing=20, #136 timing=14.5", but those
+# IDs refer to paper/backtest rows, NOT the live `positions` table — live #127
+# has timing=89.2 and #136 has timing=99.2. Do not re-tune this floor against
+# those numbers. Measured against live positions 116-137, this floor only
+# excludes #131 (timing=11.5) and #133 (timing=5.1); the other 5 losses in that
+# batch score 65-99 on timing and are caught by DIRECTION_MED_MIN_SCORE instead.
 MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "true").lower() == "true"
 
 

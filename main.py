@@ -283,6 +283,10 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # score, above MIN_COMBINED_SCORE(45), so a hard floor here is the only
     # thing that actually stops a zero-edge trade (see docs/optimizations/010,
     # PAPER-93332164: dir=0.5, combined=50.48, still lost -$154 at LOW tier).
+    # Floor raised 10 → 25 on 2026-07-30: at 10 this still admitted live #136
+    # (dir=10.9, timing=99.2 → -12.30) and #127 (dir=11.5, timing=89.2 →
+    # -11.72), i.e. trades carried entirely by timing/odds with no direction
+    # edge. See the DIRECTION_MED_MIN_SCORE comment in config.py.
     if dir_result.score < DIRECTION_MED_MIN_SCORE:
         direction.record_skip("weak_skip")
         log.debug(
