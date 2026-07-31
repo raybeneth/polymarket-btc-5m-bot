@@ -439,6 +439,149 @@
   .pnl-reveal-mask.pnl-reveal-animate { transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
   .pnl-reveal-mask.pnl-reveal-open { transform: translateX(100%); }
 
+  /* ── P&L view switch: line chart <-> daily calendar ──────────────
+     One small segmented control in the Profit/Loss header. The range tabs
+     (1D/1W/...) only make sense for the curve, so they're hidden in calendar
+     mode and the month stepper takes their place. */
+  .pnl-view-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+  .pnl-view-toggle button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 21px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0;
+  }
+  .pnl-view-toggle button svg { width: 12px; height: 12px; display: block; }
+  .pnl-view-toggle button:hover { color: var(--text); }
+  .pnl-view-toggle button.active { color: var(--accent); background: rgba(39,166,154,0.12); }
+
+  /* Month stepper — replaces the range tabs while the calendar is showing. */
+  .pnl-month-nav { display: none; align-items: center; gap: 6px; }
+  .pnl-month-nav button {
+    font-family: var(--font);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 7px;
+    cursor: pointer;
+  }
+  .pnl-month-nav button:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
+  .pnl-month-nav button:disabled { opacity: 0.3; cursor: default; }
+  .pnl-month-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; min-width: 74px; text-align: center; }
+
+  /* Calendar mode: swap which control block is visible. */
+  .pnl-half.calendar-mode .pnl-ranges { display: none; }
+  .pnl-half.calendar-mode .pnl-month-nav { display: flex; }
+  .pnl-half.calendar-mode .pnl-chart-wrap { display: none; }
+  .pnl-half:not(.calendar-mode) .pnl-calendar-wrap { display: none; }
+
+  /* ── Daily P&L calendar (exchange-style heatmap grid) ────────────
+     7 columns, UTC weeks starting Monday — Polymarket's 5m markets settle on
+     UTC boundaries, and the dashboard clock is UTC, so a local-time grid would
+     put trades in the wrong cell. Each cell is tinted by |P&L| relative to the
+     month's biggest day, so the good/bad days stand out at a glance. */
+  /* Capped on desktop: the cells are square, so letting the grid stretch to a
+     wide card's full width would make a ~600px-tall calendar and drag the
+     Portfolio card beside it just as tall. Phones use the full width. */
+  .pnl-calendar-wrap { position: relative; max-width: 360px; }
+  .pnl-cal-dows {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+    margin-bottom: 3px;
+  }
+  .pnl-cal-dow {
+    text-align: center;
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+    padding: 2px 0;
+  }
+  .pnl-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .pnl-cal-cell {
+    position: relative;
+    min-width: 0;
+    aspect-ratio: 1 / 1;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.012);
+    padding: 3px 2px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    overflow: hidden;
+    cursor: default;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .pnl-cal-cell.other-month { visibility: hidden; }
+  .pnl-cal-cell.has-data { cursor: pointer; }
+  .pnl-cal-cell.has-data:hover { border-color: var(--text-dim); }
+  .pnl-cal-cell.selected { border-color: var(--accent); }
+  .pnl-cal-cell.today { box-shadow: inset 0 0 0 1px rgba(39,166,154,0.55); }
+  .pnl-cal-day { font-size: 9px; color: var(--text-dim); line-height: 1.3; }
+  .pnl-cal-cell.has-data .pnl-cal-day { color: var(--text); }
+
+  /* The P&L figure inside a cell. Scales with the cell (cqw) so it never
+     overflows on a narrow phone, with a px floor/ceiling for readability. */
+  .pnl-cal-val {
+    font-size: clamp(7.5px, 2.05cqw, 11px);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-top: auto;
+    margin-bottom: auto;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pnl-cal-trades { font-size: clamp(6.5px, 1.6cqw, 9px); color: var(--text-dim); line-height: 1.2; padding-bottom: 3px; }
+  .pnl-cal-grid { container-type: inline-size; }
+
+  /* Footer summary: month total + how many days were green vs red. */
+  .pnl-cal-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-dim);
+    flex-wrap: wrap;
+  }
+  .pnl-cal-foot strong { font-weight: 700; }
+  .pnl-cal-foot-days { display: flex; gap: 10px; }
+
+  @media (max-width: 768px) {
+    /* Phones: slightly roomier cells (taller than square) so the amount and
+       trade count both stay legible at 7 columns across a narrow screen. */
+    .pnl-cal-cell { aspect-ratio: 1 / 1.15; border-radius: 4px; }
+    .pnl-cal-grid, .pnl-cal-dows { gap: 2px; }
+    .pnl-calendar-wrap { max-width: none; }
+
+    /* The header now carries three control blocks (range tabs / month stepper /
+       view toggle). Keep the view toggle on the title's line and let the tabs
+       wrap onto their own full-width row below rather than squeezing. */
+    .pnl-header { gap: 8px 6px; }
+    .pnl-header .pnl-title { flex: 1 1 auto; }
+    .pnl-header .pnl-view-toggle { order: 2; }
+    .pnl-header .pnl-ranges,
+    .pnl-header .pnl-month-nav { order: 3; flex: 0 0 100%; }
+    .pnl-header .pnl-ranges { justify-content: space-between; }
+    .pnl-ranges button { flex: 1; padding: 5px 0; }
+    .pnl-header .pnl-month-nav { justify-content: center; }
+  }
+
   /* Polymarket-style "flip counter" — each digit sits in its own tiny reel
      (0-9 stacked vertically) and rolls to the new value via transform,
      instead of the text just snapping to the new number. Driven by
@@ -857,8 +1000,11 @@
     </div>
   </div>
 
-  <!-- Right: Profit/Loss chart -->
-  <div class="pnl-half">
+  <!-- Right: Profit/Loss — line chart or daily calendar, switched by the
+       icon pair in the header (see setPnlView()) -->
+  <!-- Starts in calendar-mode (the default view) — keep this class, the active
+       toggle button, and _pnlView's initial value in sync. -->
+  <div class="pnl-half calendar-mode" id="pnlHalf">
     <div class="pnl-header">
       <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
       <div class="pnl-ranges" id="pnlRanges">
@@ -869,6 +1015,26 @@
         <button type="button" data-range="YTD">YTD</button>
         <button type="button" data-range="ALL">ALL</button>
       </div>
+      <div class="pnl-month-nav" id="pnlMonthNav">
+        <button type="button" data-step="-1" aria-label="上一月">&#8249;</button>
+        <span class="pnl-month-label" id="pnlMonthLabel">—</span>
+        <button type="button" data-step="1" id="pnlMonthNext" aria-label="下一月">&#8250;</button>
+      </div>
+      <div class="pnl-view-toggle" id="pnlViewToggle">
+        <button type="button" data-view="chart" title="折线图" aria-label="折线图">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1.5 11.5 5 7l3 2.5 5.5-6"/>
+          </svg>
+        </button>
+        <button type="button" data-view="calendar" class="active" title="日历图" aria-label="日历图">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="1.8" y="2.8" width="12.4" height="11.4" rx="1.6"/>
+            <path d="M1.8 6.4h12.4M5.4 1.6v2.4M10.6 1.6v2.4"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="pnl-balance" id="pnlBalance">$0.00</div>
     <div class="pnl-sub" id="pnlSub">&nbsp;</div>
@@ -876,6 +1042,17 @@
       <div id="pnlChart" style="width:100%;height:100%"></div>
       <span class="pnl-watermark">Polymarket</span>
       <div class="pnl-reveal-mask pnl-reveal-open" id="pnlRevealMask"></div>
+    </div>
+    <div class="pnl-calendar-wrap" id="pnlCalendarWrap">
+      <div class="pnl-cal-dows" id="pnlCalDows"></div>
+      <div class="pnl-cal-grid" id="pnlCalGrid"></div>
+      <div class="pnl-cal-foot">
+        <span>Month <strong id="pnlCalMonthTotal">$0.00</strong></span>
+        <span class="pnl-cal-foot-days">
+          <span class="positive" id="pnlCalWinDays">0 up</span>
+          <span class="negative" id="pnlCalLossDays">0 down</span>
+        </span>
+      </div>
     </div>
   </div>
 
@@ -1437,7 +1614,12 @@ let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
 let _pnlRange = '1D';
-let _accountBalance = 0;      // overwritten by the first successful d.account_balance
+// Default view is the daily calendar; the curve is one tap away. Kept in sync
+// with the .calendar-mode class and the active toggle button in the markup.
+// Declared here, not with the other calendar state further down, because
+// _renderPnlHeadline branches on it and may run before that block is evaluated.
+let _pnlView = 'calendar';    // 'chart' | 'calendar'
+let _accountBalance = 0;     // overwritten by the first successful d.account_balance
 let _balanceLoaded = false;   // true once a real (non-null) balance has ever arrived
 let _balanceStale = false;    // true when the latest payload's account_balance was null
                                // (live-mode wallet query failed) — last known value is kept
@@ -1582,8 +1764,12 @@ function initPnlChart() {
 // a signed change, not a balance.
 function _renderPnlHeadline(hoverValue, hoverTime) {
   // ── Right block: Profit/Loss (the P&L amount + curve) ──
+  // In calendar mode the same headline shows the selected day / visible month
+  // instead of the curve's range change (see _renderCalendarHeadline).
   const pnlEl = $('pnlBalance'), pnlSubEl = $('pnlSub');
-  if (pnlEl && pnlSubEl) {
+  if (_pnlView === 'calendar') {
+    _renderCalendarHeadline();
+  } else if (pnlEl && pnlSubEl) {
     if (hoverValue != null) {
       // Hovering a chart point → show that point's raw cumulative P&L.
       _setOdometerText(pnlEl, (hoverValue >= 0 ? '+' : '-') + _fmtUsd(hoverValue));
@@ -1690,7 +1876,7 @@ function applyPnlRange(range) {
   _renderPnlHeadline();
 }
 
-function updatePnlChart(series, accountBalance) {
+function updatePnlChart(series, accountBalance, history) {
   if (accountBalance != null) {
     _balanceLoaded = true;
     _balanceStale = false;
@@ -1704,7 +1890,12 @@ function updatePnlChart(series, accountBalance) {
   }
   if (!_pnlChart) initPnlChart();
   _pnlFullSeries = series || [];
+  if (history) _calHistory = history;
+  // Rebuild the per-day buckets on every tick so the calendar view stays as
+  // live as the curve; only re-render the DOM grid while it's the visible view.
+  _calDays = _buildCalDays(_pnlFullSeries, _calHistory);
   applyPnlRange(_pnlRange);
+  if (_pnlView === 'calendar') renderPnlCalendar();
 }
 
 // User-initiated range switch (1D/1W/1M/...): cover the chart with a curtain,
@@ -1740,6 +1931,235 @@ $('pnlRanges').addEventListener('click', e => {
   const btn = e.target.closest('button');
   if (!btn) return;
   switchPnlRange(btn.dataset.range);
+});
+
+// ── Daily P&L calendar (exchange-style) ───────────────────────────
+// A second view of the same Profit/Loss data: one tinted cell per UTC day
+// showing that day's realised P&L and trade count, switched via the icon pair
+// in the card header. Everything is UTC — the 5m markets settle on UTC
+// boundaries and the dashboard clock is UTC, so bucketing by local date would
+// file trades under the wrong day for anyone outside UTC+0.
+// Seeded eagerly (not left null until the first renderPnlCalendar) because the
+// calendar is the default view: the first WS payload runs
+// updatePnlChart -> applyPnlRange -> _renderPnlHeadline -> the calendar headline,
+// which reads this, before renderPnlCalendar() ever gets a chance to fill it in.
+let _calMonth = _currentUtcMonth();  // {y, m} — m is 0-11, UTC
+let _calSelected = null;              // 'YYYY-MM-DD' of the tapped cell, or null
+let _calDays = new Map();             // 'YYYY-MM-DD' -> {pnl, trades}
+let _calHistory = [];                 // latest history payload, for per-day trade counts
+
+const CAL_DOW_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+// Hoisted (function declaration, not a const arrow) so the _calMonth
+// initialiser above can call it.
+function _currentUtcMonth() {
+  const d = new Date();
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+}
+
+function _utcDayKey(ts) {
+  const d = new Date(ts * 1000);
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${m}-${day}`;
+}
+
+// Per-day realised P&L, derived from the cumulative curve rather than summed
+// from local trade rows: in live mode that curve is Polymarket's own series, so
+// the calendar can't drift from the chart/headline above it (it also picks up
+// fees and settlements the local positions table never saw). Trade counts do
+// come from local history — the remote series carries no count.
+function _buildCalDays(series, history) {
+  const days = new Map();
+
+  let prevCum = 0;
+  let curKey = null, curLast = null;
+  const flush = () => {
+    if (curKey === null) return;
+    days.set(curKey, { pnl: curLast - prevCum, trades: 0 });
+    prevCum = curLast;
+  };
+  for (const p of series) {
+    const key = _utcDayKey(p.t);
+    if (key !== curKey) { flush(); curKey = key; }
+    curLast = p.v;
+  }
+  flush();
+
+  // Trade counts, keyed on close time (same bucket the P&L lands in). Falls
+  // back to the open time for rows without one.
+  for (const h of history) {
+    const ts = h.closed_at || h.opened_at;
+    if (!ts) continue;
+    const key = _utcDayKey(ts);
+    const entry = days.get(key);
+    if (entry) entry.trades += 1;
+    else days.set(key, { pnl: 0, trades: 1 });
+  }
+  return days;
+}
+
+function _calMonthLabel(y, m) {
+  return new Date(Date.UTC(y, m, 1)).toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+// Cell-sized money: 7 columns on a phone leave ~45px per cell, so thousands
+// collapse to "$1.2k" rather than overflowing. The headline/footer keep the
+// full-precision _fmtUsd.
+function _fmtUsdCell(v) {
+  const a = Math.abs(v);
+  if (a >= 1000) return '$' + (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'k';
+  return '$' + a.toFixed(a >= 100 ? 0 : 2);
+}
+
+function _calCellTint(pnl, maxAbs) {
+  if (!pnl || !maxAbs) return 'transparent';
+  // Floor of 0.10 so even the smallest day is visibly tinted, scaling to 0.45
+  // at the month's largest absolute move.
+  const a = (0.10 + 0.35 * Math.min(1, Math.abs(pnl) / maxAbs)).toFixed(3);
+  return pnl >= 0 ? `rgba(39,166,154,${a})` : `rgba(239,83,80,${a})`;
+}
+
+function renderPnlCalendar() {
+  const grid = $('pnlCalGrid');
+  if (!grid) return;
+
+  const nowD = new Date();
+  const { y, m } = _calMonth;
+
+  const dows = $('pnlCalDows');
+  if (dows && !dows.childElementCount) {
+    dows.innerHTML = CAL_DOW_LABELS.map(l => `<div class="pnl-cal-dow">${l}</div>`).join('');
+  }
+
+  $('pnlMonthLabel').textContent = _calMonthLabel(y, m);
+  // No stepping into the future — there's nothing to show past this month.
+  const atCurrent = y === nowD.getUTCFullYear() && m === nowD.getUTCMonth();
+  $('pnlMonthNext').disabled = atCurrent;
+
+  const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  // getUTCDay() is 0=Sun; shift so Monday is column 0.
+  const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7;
+  const todayKey = _utcDayKey(Math.floor(Date.now() / 1000));
+
+  const monthKeys = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    monthKeys.push(`${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+  }
+  const maxAbs = monthKeys.reduce((mx, k) => {
+    const e = _calDays.get(k);
+    return e ? Math.max(mx, Math.abs(e.pnl)) : mx;
+  }, 0);
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="pnl-cal-cell other-month"></div>');
+  let monthTotal = 0, upDays = 0, downDays = 0;
+  monthKeys.forEach((key, i) => {
+    const e = _calDays.get(key);
+    const day = i + 1;
+    const hasData = !!e && (e.trades > 0 || Math.abs(e.pnl) > 0.0000001);
+    const pnl = e ? e.pnl : 0;
+    if (hasData) {
+      monthTotal += pnl;
+      if (pnl > 0) upDays++;
+      else if (pnl < 0) downDays++;
+    }
+    const cls = ['pnl-cal-cell'];
+    if (hasData) cls.push('has-data');
+    if (key === todayKey) cls.push('today');
+    if (key === _calSelected) cls.push('selected');
+    const tint = hasData ? _calCellTint(pnl, maxAbs) : 'transparent';
+    const valHtml = hasData
+      ? `<div class="pnl-cal-val ${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : '-'}${_fmtUsdCell(pnl)}</div>
+         <div class="pnl-cal-trades">${e.trades ? e.trades + (e.trades > 1 ? ' trades' : ' trade') : '&nbsp;'}</div>`
+      : '';
+    cells.push(
+      `<div class="${cls.join(' ')}" style="background:${tint}" data-day="${key}"${hasData ? '' : ' aria-disabled="true"'}>
+         <div class="pnl-cal-day">${day}</div>${valHtml}
+       </div>`
+    );
+  });
+  grid.innerHTML = cells.join('');
+
+  const totalEl = $('pnlCalMonthTotal');
+  totalEl.textContent = (monthTotal >= 0 ? '+' : '-') + _fmtUsd(monthTotal);
+  totalEl.className = monthTotal >= 0 ? 'positive' : 'negative';
+  $('pnlCalWinDays').textContent = `${upDays} up`;
+  $('pnlCalLossDays').textContent = `${downDays} down`;
+
+  if (_pnlView === 'calendar') _renderPnlHeadline();
+}
+
+// Headline for calendar mode: the tapped day's P&L, or the visible month's
+// total when nothing is selected.
+function _renderCalendarHeadline() {
+  const pnlEl = $('pnlBalance'), pnlSubEl = $('pnlSub');
+  if (!pnlEl || !pnlSubEl) return;
+
+  if (_calSelected) {
+    const e = _calDays.get(_calSelected);
+    const v = e ? e.pnl : 0;
+    _setOdometerText(pnlEl, (v >= 0 ? '+' : '-') + _fmtUsd(v));
+    pnlEl.className = 'pnl-balance ' + (v >= 0 ? 'positive' : 'negative');
+    const [yy, mm, dd] = _calSelected.split('-').map(Number);
+    const dateStr = new Date(Date.UTC(yy, mm - 1, dd))
+      .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    const n = e ? e.trades : 0;
+    pnlSubEl.textContent = `${dateStr} · ${n} trade${n === 1 ? '' : 's'} (UTC)`;
+    return;
+  }
+
+  const { y, m } = _calMonth;
+  const prefix = `${y}-${String(m + 1).padStart(2, '0')}-`;
+  let total = 0, n = 0;
+  _calDays.forEach((e, key) => {
+    if (!key.startsWith(prefix)) return;
+    total += e.pnl;
+    n += e.trades;
+  });
+  _setOdometerText(pnlEl, (total >= 0 ? '+' : '-') + _fmtUsd(total));
+  pnlEl.className = 'pnl-balance ' + (total >= 0 ? 'positive' : 'negative');
+  pnlSubEl.textContent = `${_calMonthLabel(y, m)} · ${n} trade${n === 1 ? '' : 's'} (UTC)`;
+}
+
+function setPnlView(view) {
+  if (view === _pnlView) return;
+  _pnlView = view;
+  $('pnlHalf').classList.toggle('calendar-mode', view === 'calendar');
+  $('pnlViewToggle').querySelectorAll('button')
+    .forEach(b => b.classList.toggle('active', b.dataset.view === view));
+
+  if (view === 'calendar') {
+    renderPnlCalendar();
+  } else {
+    // The chart was in a display:none container, so its canvas may have been
+    // sized to 0 — re-fit once it's laid out again.
+    requestAnimationFrame(() => { if (_pnlChart) applyPnlRange(_pnlRange); });
+  }
+  _renderPnlHeadline();
+}
+
+$('pnlViewToggle').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (btn) setPnlView(btn.dataset.view);
+});
+
+$('pnlMonthNav').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn || btn.disabled) return;
+  const step = Number(btn.dataset.step);
+  const d = new Date(Date.UTC(_calMonth.y, _calMonth.m + step, 1));
+  _calMonth = { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+  _calSelected = null;   // selection belongs to the month it was made in
+  renderPnlCalendar();
+});
+
+// Tap a day to pin it in the headline; tap again to release back to the month.
+$('pnlCalGrid').addEventListener('click', e => {
+  const cell = e.target.closest('.pnl-cal-cell');
+  if (!cell || !cell.classList.contains('has-data')) return;
+  _calSelected = cell.dataset.day === _calSelected ? null : cell.dataset.day;
+  renderPnlCalendar();
 });
 
 // Desktop only: make Live Log's visible height match the BTC chart card's
@@ -1851,7 +2271,7 @@ function render(d) {
   // BTC live 5m candlestick chart (current candle driven by the latest spot tick)
   updateBtcChart(d.btc_price, d.btc_target, positions);
   updateTradeMarkers(history);
-  updatePnlChart(d.pnl_series, d.account_balance);
+  updatePnlChart(d.pnl_series, d.account_balance, history);
   syncHistoryHeightToChart();
 
   $('posCount').textContent = positions.length;

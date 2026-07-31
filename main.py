@@ -540,6 +540,11 @@ def _build_web_state() -> dict:
                 "hold": int(h["closed_at"] - h["opened_at"]) if h["closed_at"] and h["opened_at"] else 0,
                 "closed_ago": int(now - h["closed_at"]) if h["closed_at"] else 0,
                 "opened_at": h["opened_at"],
+                # Absolute close timestamp (not just closed_ago) so the
+                # dashboard's daily-P&L calendar can bucket each trade into the
+                # right UTC day — a relative age would drift with clock skew and
+                # could file a trade under the wrong day near UTC midnight.
+                "closed_at": h["closed_at"],
                 "order_id": h["order_id"],
             }
             for h in _recent_closed
