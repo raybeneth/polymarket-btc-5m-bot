@@ -20,7 +20,11 @@ log = logging.getLogger(__name__)
 
 _WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 _STATIC_DIR = Path(__file__).parent / "static"
-_OPT_DIR = Path(__file__).parent.parent / "docs" / "optimizations"
+# _OPT_DIR = Path(__file__).parent.parent / "docs" / "optimizations"  # see below
+# Polymarket account avatar shown in the dashboard header — a static file in the
+# repo root. Resolved from __file__, NOT the cwd: in Docker the process runs with
+# WORKDIR=/data while the code lives in /app, so a relative path would miss.
+_AVATAR_FILE = Path(__file__).parent.parent / "pol-profile-pic.png"
 _MAX_LOG_LINES = 200
 
 # ─────────────────────────────────────────────
@@ -109,48 +113,90 @@ async def _handle_index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(_STATIC_DIR / "index.html")
 
 
+async def _handle_avatar(request: web.Request):
+    """Serve the header avatar (pol-profile-pic.png in the repo root).
+
+    A single explicit route rather than exposing the repo root as a static dir —
+    that would serve .env, config.py and everything else. 404 when the file is
+    absent; the frontend's onerror then hides the <img>, so a missing avatar is
+    a non-event rather than a broken image.
+    """
+    if not _AVATAR_FILE.is_file():
+        return web.Response(status=404, text="avatar not found")
+
+    # Content-Type from the file's MAGIC BYTES, not its extension. Avatars saved
+    # straight off polymarket.com are frequently WebP even when the filename says
+    # .png — FileResponse would then declare image/png for WebP bytes. Browsers
+    # usually sniff past that, but relying on sniffing is needless fragility.
+    head = _AVATAR_FILE.open("rb").read(12)
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        ctype = "image/png"
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        ctype = "image/webp"
+    elif head[:3] == b"\xff\xd8\xff":
+        ctype = "image/jpeg"
+    elif head[:6] in (b"GIF87a", b"GIF89a"):
+        ctype = "image/gif"
+    else:
+        ctype = "application/octet-stream"
+
+    # Long cache: the file only changes when it's manually replaced, and the
+    # dashboard is a long-lived tab that would otherwise re-request it on
+    # every reload. Bust it with a ?v= query if you swap the image.
+    return web.FileResponse(
+        _AVATAR_FILE,
+        headers={"Cache-Control": "public, max-age=86400", "Content-Type": ctype},
+    )
+
+
 async def _handle_api_state(request: web.Request) -> web.Response:
     return web.json_response(_get_snapshot())
 
 
-async def _handle_api_klines(request: web.Request) -> web.Response:
-    # Recent 5m klines for the dashboard's BTC candlestick chart. Served on its
-    # own endpoint (fetched by the frontend on load + every 60s) rather than in
-    # the 2s WS broadcast, since ~180 candles per push would bloat the payload.
-    from feeds import btc_price
-    return web.json_response(btc_price.get_klines())
+# ── DISABLED 2026-08-01: BTC/USDT candlestick chart module removed ──────────
+# Both endpoints below existed solely to feed the dashboard's BTC chart:
+#   /api/klines — 5m candle history, polled by the frontend every 60s
+#   /api/price  — latest spot price, polled every 700ms to animate the live
+#                 candle (it also smoothed the header price, which now updates
+#                 from the 2s WebSocket broadcast in render() instead)
+# Kept commented rather than deleted so the chart can be restored in one step.
+# The BTC price FEED itself is untouched — feeds.btc_price still drives
+# direction.py, _btc_entry_ready() and settlement via get_prices_since().
+#
+# async def _handle_api_klines(request: web.Request) -> web.Response:
+#     from feeds import btc_price
+#     return web.json_response(btc_price.get_klines())
+#
+#
+# async def _handle_api_price(request: web.Request) -> web.Response:
+#     """Lightweight endpoint returning only the latest BTC spot price."""
+#     from feeds import btc_price
+#     return web.json_response({"p": btc_price.get_latest()})
 
 
-async def _handle_api_price(request: web.Request) -> web.Response:
-    """Lightweight endpoint returning only the latest BTC spot price.
-    The frontend polls this at ~700ms to update the live candlestick between
-    the slower 2s WebSocket broadcasts."""
-    from feeds import btc_price
-    return web.json_response({"p": btc_price.get_latest()})
-
-
-async def _handle_api_optimizations(request: web.Request) -> web.Response:
-    """
-    List the optimization records under docs/optimizations for the dashboard's
-    slide-out menu. Returns [{name, num, title, markdown}] sorted by number,
-    where `num` is the NNN filename prefix and `title` is the first '# ' heading.
-    README.md and non-numbered files are skipped.
-    """
-    items = []
-    if _OPT_DIR.is_dir():
-        for p in sorted(_OPT_DIR.glob("[0-9]*.md")):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            num = p.name.split("-", 1)[0]
-            title = p.stem
-            for line in text.splitlines():
-                if line.startswith("# "):
-                    title = line[2:].strip()
-                    break
-            items.append({"name": p.name, "num": num, "title": title, "markdown": text})
-    return web.json_response(items)
+# ── DISABLED 2026-08-01: /api/optimizations ─────────────────────────────────
+# Served docs/optimizations/*.md to the dashboard, which auto-popped the newest
+# record once per record as a "what's new" notice. The frontend fetch, the modal
+# that displayed it, and the marked.js CDN that rendered the markdown are all
+# disabled too — nothing consumed this any more. The files under
+# docs/optimizations/ are untouched; only the HTTP surface is gone.
+#
+# async def _handle_api_optimizations(request: web.Request) -> web.Response:
+#     items = []
+#     if _OPT_DIR.is_dir():
+#         for p in sorted(_OPT_DIR.glob("[0-9]*.md")):
+#             try:
+#                 text = p.read_text(encoding="utf-8")
+#             except Exception:
+#                 continue
+#             num = p.name.split("-", 1)[0]
+#             title = p.stem
+#             for line in text.splitlines():
+#                 if line.startswith("# "):
+#                     title = line[2:].strip()
+#                     break
+#             items.append({"name": p.name, "num": num, "title": title, "markdown": text})
+#     return web.json_response(items)
 
 
 async def _handle_api_strategy_links(request: web.Request) -> web.Response:
@@ -258,10 +304,12 @@ async def start_web_server() -> None:
     _start_log_writer()  # begin persisting dashboard log lines to MySQL
     app = web.Application()
     app.router.add_get("/", _handle_index)
+    app.router.add_get("/avatar.png", _handle_avatar)
     app.router.add_get("/api/state", _handle_api_state)
-    app.router.add_get("/api/klines", _handle_api_klines)
-    app.router.add_get("/api/price", _handle_api_price)
-    app.router.add_get("/api/optimizations", _handle_api_optimizations)
+    # BTC chart endpoints disabled — see the commented handlers above.
+    # app.router.add_get("/api/klines", _handle_api_klines)
+    # app.router.add_get("/api/price", _handle_api_price)
+    # app.router.add_get("/api/optimizations", _handle_api_optimizations)
     app.router.add_get("/api/strategy_links", _handle_api_strategy_links)
     app.router.add_post("/api/trading/toggle", _handle_api_trading_toggle)
     app.router.add_get("/ws", _handle_ws)

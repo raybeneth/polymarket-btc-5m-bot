@@ -337,7 +337,12 @@ async def start_feed() -> None:
     Call once at bot startup; it runs forever.
     """
     asyncio.create_task(_run_feed(), name="btc_price_feed")
-    asyncio.create_task(_run_klines(), name="btc_klines")
+    # DISABLED 2026-08-01: kline REST polling served only the dashboard's BTC
+    # candlestick chart, which is now commented out (web/server.py, index.html).
+    # This stops one outbound REST request per 60s to the exchange. The WS trade
+    # feed above is untouched — it fills _price_history, which direction.py and
+    # settlement depend on.
+    # asyncio.create_task(_run_klines(), name="btc_klines")
     # Wait until first price arrives before returning
     for _ in range(100):
         if _latest_price is not None:

@@ -3,21 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Polymarket BTC 5min Bot</title>
+<title>PolymarketGo</title>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<!-- marked.js dropped 2026-08-01: its only use was rendering the optimization
+     records' markdown in the doc modal, which is disabled. One less CDN request. -->
+<!-- <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script> -->
 <style>
+  /* ── Palette (restyled 2026-08-01 to match Polymarket's dark theme) ────────
+     Two deliberate changes from the old scheme beyond the hues themselves:
+
+     1. --accent and --green are now DIFFERENT colours. They used to both be
+        #27a69a, which conflated "brand / primary action" with "profit". Here
+        indigo carries brand + CTA, green means profit only. Anything that reads
+        as a value judgement (P&L, win/loss) must use --green/--red; anything
+        that's just chrome (buttons, active tabs, links) uses --accent.
+     2. Greys are NEUTRAL, not blue-teal tinted. Dim text especially — the old
+        #7a9aaa read as a colour, which fought with the accent.
+
+     --accent-soft / --red-soft are the tinted fills that used to be written as
+     one-off rgba() literals; going through variables keeps them in step if the
+     accent ever moves again. */
   :root {
-    --bg:       #0f1a20;
-    --card:     #162530;
-    --border:   #1e303c;
-    --text:     #c9d1d9;
-    --text-dim: #7a9aaa;
-    --accent:   #27a69a;
-    --green:    #27a69a;
-    --red:      #ef5350;
-    --yellow:   #d29922;
-    --font: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    --bg:          #0d0d0f;
+    --card:        #17171b;
+    --card-hover:  #1d1d22;
+    --border:      #27272e;
+    --text:        #ededf0;
+    --text-dim:    #8b8b96;
+    --accent:      #453ae0;
+    --accent-hi:   #5a50ea;   /* hover state for accent-filled buttons */
+    --accent-soft: rgba(69, 58, 224, 0.14);
+    /* --accent is a FILL colour. At #453ae0 on a #0d0d0f background it fails
+       contrast as small text (~3.2:1), so anything using it for TEXT — links,
+       headings, the logo, log lines — uses this lighter tint instead (~8.5:1). */
+    --accent-text: #9d95f2;
+    --green:       #22c55e;
+    --red:         #ef4444;
+    --red-soft:    rgba(239, 68, 68, 0.14);
+    --yellow:      #eab308;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+            'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    /* Kept for the few places where digits must not reflow as they tick. */
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -48,29 +75,33 @@
     margin: 20px 24px 0;
     padding: 16px 24px;
     border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    /* Flatter, rounder cards than before: the reference UI separates surfaces
+       with a subtle border and a lifted background, not a drop shadow. Dropping
+       the shadow also stops the cards reading as "floating" on the near-black
+       background, where a soft black shadow is invisible anyway. */
+    border-radius: 14px;
     background: var(--card);
   }
   .header-left { display: flex; align-items: center; gap: 16px; }
   .logo {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
-    color: var(--accent);
-    letter-spacing: 1px;
+    color: var(--text);        /* white wordmark, like the reference */
+    letter-spacing: -0.2px;
   }
   .mode-badge {
-    background: rgba(39, 166, 154, 0.15);
-    color: var(--accent);
-    padding: 2px 10px;
-    border-radius: 4px;
+    background: var(--accent-soft);
+    color: #a9a2f5;          /* accent is too dark to read as text on its own tint */
+    padding: 3px 10px;
+    border-radius: 999px;
     font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.4px;
   }
   .mode-badge.live {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
+    background: var(--red-soft);
+    color: #fca5a5;
   }
   .header-right {
     display: flex;
@@ -89,32 +120,34 @@
   .conn-dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .conn-dot.off { background: var(--red); }
 
-  /* "15M AI BOT" jump button — pinned in the header's right group. Accent-
-     filled so it reads as the primary cross-dashboard link, not just another
-     status readout. */
-  .btn-15m {
-    display: inline-flex;
+  /* The "15M AI BOT" jump button (.btn-15m) was removed 2026-08-01 along with
+     its markup — nothing references it any more, so the rules are gone too. */
+
+  /* BTC price + WS status, now in the header's LEFT group. The dim/small type
+     comes from .header-right by default, so it's restated here. */
+  .header-status, .ws-status {
+    display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 14px;
-    border-radius: 6px;
-    background: var(--accent);
-    color: #0f1a20;
-    font-family: var(--font);
+    color: var(--text-dim);
     font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    text-decoration: none;
-    white-space: nowrap;
-    transition: background 0.15s ease;
   }
-  .btn-15m:hover { background: #2fc0b2; }
-  .btn-15m::before { content: '\1F916'; font-size: 12px; }
+
+  /* Polymarket account avatar, right end of the header. Fixed square so a
+     non-square source image can't distort the header's height. */
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    background: var(--card);
+    display: block;
+  }
+  .avatar[hidden] { display: none; }
 
 
-  /* ── Info row — independent floating card below the header, showing
-     total deposits (manually maintained, see config.py TOTAL_DEPOSITS_USD)
-     and Polymarket's own UTC clock ── */
+  /* ── Info row (Total Deposits + UTC clock) — DISABLED 2026-08-01.
+     Rules kept so restoring the markup brings the styling back with it. ──
   .info-row {
     display: flex;
     align-items: center;
@@ -137,6 +170,7 @@
   @media (max-width: 768px) {
     .info-row { margin: 10px 12px 0; padding: 12px 14px; flex-wrap: wrap; gap: 8px 16px; }
   }
+  ── end of disabled info-row styles ── */
 
   /* ── Modal — shared base styles (used by the optimization-record modal) ── */
   .modal-overlay {
@@ -169,7 +203,7 @@
   .modal-title {
     font-size: 11px;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--accent-text);
     text-transform: uppercase;
     letter-spacing: 1px;
   }
@@ -198,9 +232,9 @@
     font-size: 12.5px;
     line-height: 1.7;
   }
-  .doc-body h1 { font-size: 16px; color: var(--accent); margin: 4px 0 12px; }
+  .doc-body h1 { font-size: 16px; color: var(--accent-text); margin: 4px 0 12px; }
   .doc-body h2 { font-size: 14px; color: var(--text); margin: 18px 0 8px; padding-top: 10px; border-top: 1px solid var(--border); }
-  .doc-body h3 { font-size: 12.5px; color: var(--accent); margin: 14px 0 6px; }
+  .doc-body h3 { font-size: 12.5px; color: var(--accent-text); margin: 14px 0 6px; }
   .doc-body p  { margin: 8px 0; }
   .doc-body ul, .doc-body ol { margin: 8px 0 8px 20px; }
   .doc-body li { margin: 3px 0; }
@@ -210,7 +244,7 @@
     padding: 1px 5px; border-radius: 3px; font-size: 11.5px;
   }
   .doc-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
-  .doc-body a { color: var(--accent); }
+  .doc-body a { color: var(--accent-text); }
   .doc-body table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 11.5px; }
   .doc-body th, .doc-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
   .doc-body th { background: var(--bg); color: var(--text-dim); font-weight: 600; }
@@ -234,16 +268,18 @@
     background: var(--card);
     padding: 18px 24px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 14px;
   }
+  /* Sentence case, no tracking — the all-caps wide-tracked labels read as a
+     terminal UI, which is what this restyle moves away from. */
   .stat-label {
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    text-transform: none;
+    letter-spacing: 0;
     margin-bottom: 6px;
   }
-  .stat-value { font-size: 21px; font-weight: 700; }
+  .stat-value { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
   .stat-sub { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
   .positive { color: var(--green); }
   .negative { color: var(--red); }
@@ -261,8 +297,7 @@
     min-width: 0;
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    border-radius: 14px;   /* shadow dropped — see .header */
     padding: 16px 20px;
     display: flex;
     flex-direction: column;
@@ -281,18 +316,20 @@
   }
   /* Portfolio title doubles as a link to the Polymarket account profile. */
   a.portfolio-link { text-decoration: none; color: var(--text-dim); transition: color 0.15s ease; }
-  a.portfolio-link:hover { color: var(--accent); }
+  a.portfolio-link:hover { color: var(--accent-text); }
   .portfolio-link-icon { width: 14px; height: 14px; margin-left: -1px; vertical-align: -2px; opacity: 0.85; border-radius: 50%; object-fit: cover; }
   .portfolio-avail { text-align: right; }
   .portfolio-avail-label {
-    font-size: 10px;
+    font-size: 11.5px;
     color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    text-transform: none;
+    letter-spacing: 0;
   }
-  .portfolio-avail-value { font-size: 15px; font-weight: 700; margin-top: 2px; }
-  .portfolio-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
-  .portfolio-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 14px; }
+  .portfolio-avail-value { font-size: 15px; font-weight: 700; margin-top: 2px;
+    font-variant-numeric: tabular-nums; }
+  .portfolio-balance { font-size: 30px; font-weight: 700; line-height: 1.2;
+    letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+  .portfolio-sub { font-size: 11.5px; color: var(--text-dim); margin: 3px 0 14px; }
   /* Deposit / Withdraw / pause-resume all share one row now — Deposit stays
      the primary action (wider), Withdraw and the pause toggle are narrower
      and equal-width, so adding the toggle doesn't grow the card's height. */
@@ -308,8 +345,8 @@
     text-decoration: none;
     cursor: pointer;
   }
-  .btn-deposit { flex: 1.6; background: #2d6cdf; color: #fff; }
-  .btn-deposit:hover { background: #3b78e6; }
+  .btn-deposit { flex: 1.6; background: var(--accent); color: #fff; }
+  .btn-deposit:hover { background: var(--accent-hi); }
   .btn-withdraw {
     flex: 1;
     background: transparent;
@@ -330,11 +367,11 @@
   }
   .btn-trading-toggle:hover { border-color: var(--text-dim); }
   .btn-trading-toggle.paused {
-    background: rgba(239, 83, 80, 0.15);
+    background: var(--red-soft);
     border-color: var(--red);
-    color: var(--red);
+    color: #fca5a5;
   }
-  .btn-trading-toggle.paused:hover { background: rgba(239, 83, 80, 0.25); }
+  .btn-trading-toggle.paused:hover { background: rgba(239, 68, 68, 0.24); }
 
   /* Password prompt for the pause/resume toggle — reuses the shared .modal-* base. */
   .pause-input {
@@ -349,7 +386,10 @@
        for any input with a computed font-size below 16px. */
     font-size: 16px;
   }
-  .pause-input:focus { outline: none; border-color: var(--accent); }
+  /* Focus ring uses the LIGHT accent on purpose: --accent (#453ae0) against the
+     card's #17171b is nearly invisible as a 1px line. Same for the selected
+     calendar cell below. */
+  .pause-input:focus { outline: none; border-color: var(--accent-text); }
   .pause-error { color: var(--red); font-size: 11px; margin-top: 8px; min-height: 14px; }
   .pause-confirm {
     margin-top: 12px;
@@ -357,14 +397,14 @@
     padding: 10px 0;
     border-radius: 8px;
     background: var(--accent);
-    color: #0f1a20;
+    color: #fff;              /* indigo is dark — white text, not the old dark-on-teal */
     border: none;
     font-family: var(--font);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
   }
-  .pause-confirm:hover { background: #2fc0b2; }
+  .pause-confirm:hover { background: var(--accent-hi); }
 
   /* Right block — Profit/Loss chart. Watermark echoing Polymarket's widget. */
   .pnl-watermark {
@@ -390,10 +430,11 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    font-size: 11px;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-size: 12px;
+    color: var(--text);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
   }
   .pnl-dot {
     width: 7px; height: 7px;
@@ -401,26 +442,29 @@
     background: var(--accent);
     flex-shrink: 0;
   }
-  .pnl-ranges { display: flex; gap: 4px; }
+  /* Range chips: borderless pills that fill in when active (Polymarket style),
+     rather than outlined boxes. */
+  .pnl-ranges { display: flex; gap: 2px; }
   .pnl-ranges button {
     font-family: var(--font);
-    font-size: 10px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--text-dim);
     background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 9px;
+    border: none;
+    border-radius: 999px;
+    padding: 5px 10px;
     cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
   }
-  .pnl-ranges button:hover { color: var(--text); }
+  .pnl-ranges button:hover { color: var(--text); background: var(--card-hover); }
   .pnl-ranges button.active {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: rgba(39,166,154,0.10);
+    color: #fff;
+    background: var(--accent);
   }
-  .pnl-balance { font-size: 28px; font-weight: 700; line-height: 1.2; }
-  .pnl-sub { font-size: 10.5px; color: var(--text-dim); margin: 3px 0 8px; }
+  .pnl-balance { font-size: 30px; font-weight: 700; line-height: 1.2;
+    letter-spacing: -0.5px; }
+  .pnl-sub { font-size: 11.5px; color: var(--text-dim); margin: 3px 0 8px; }
   .pnl-chart-wrap { height: 110px; position: relative; overflow: hidden; }
 
   /* Left-to-right "trend draws in" reveal on range switch (Polymarket-style):
@@ -458,7 +502,7 @@
   }
   .pnl-view-toggle button svg { width: 12px; height: 12px; display: block; }
   .pnl-view-toggle button:hover { color: var(--text); }
-  .pnl-view-toggle button.active { color: var(--accent); background: rgba(39,166,154,0.12); }
+  .pnl-view-toggle button.active { color: #fff; background: var(--accent); }
 
   /* Month stepper — replaces the range tabs while the calendar is showing. */
   .pnl-month-nav { display: none; align-items: center; gap: 6px; }
@@ -525,8 +569,8 @@
   .pnl-cal-cell.other-month { visibility: hidden; }
   .pnl-cal-cell.has-data { cursor: pointer; }
   .pnl-cal-cell.has-data:hover { border-color: var(--text-dim); }
-  .pnl-cal-cell.selected { border-color: var(--accent); }
-  .pnl-cal-cell.today { box-shadow: inset 0 0 0 1px rgba(39,166,154,0.55); }
+  .pnl-cal-cell.selected { border-color: var(--accent-text); }
+  .pnl-cal-cell.today { box-shadow: inset 0 0 0 1px rgba(69, 58, 224, 0.65); }
   .pnl-cal-day { font-size: 9px; color: var(--text-dim); line-height: 1.3; }
   .pnl-cal-cell.has-data .pnl-cal-day { color: var(--text); }
 
@@ -586,6 +630,16 @@
      (0-9 stacked vertically) and rolls to the new value via transform,
      instead of the text just snapping to the new number. Driven by
      _setOdometerText(), used for the P&L headline while scrubbing the chart. */
+  /* The reel positions each digit in a 1ch-wide box. The palette's font is now
+     proportional, where digit advance widths can differ — that made the reels
+     shift horizontally as values changed. tabular-nums forces fixed-width
+     figures inside the same typeface, so the columns stay put without giving up
+     the sans-serif look. Applied to every ticking readout, not just the reel. */
+  .odo-digit, .odo-char, .pnl-balance, .btc-price,
+  .stat-value, .positions-table td {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
   .odo-digit {
     display: inline-block;
     position: relative;
@@ -631,16 +685,16 @@
   .chart-title {
     font-size: 10px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-text);
     text-transform: uppercase;
     letter-spacing: 1px;
   }
   .chart-sub { font-size: 10px; color: var(--text-dim); }
   .chart-wrap { flex: 1; position: relative; min-height: 120px; }
 
-  /* ── BTC 5m candlestick chart (full width, below the stats/P&L row) ── */
-  .btc-chart-card { border: 1px solid var(--border); border-radius: 12px; }
-  .btc-chart-card .chart-wrap { height: 460px; flex: none; }
+  /* ── BTC 5m candlestick chart (disabled 2026-08-01 — rules kept for restore) ── */
+  /* .btc-chart-card { border: 1px solid var(--border); border-radius: 12px; } */
+  /* .btc-chart-card .chart-wrap { height: 460px; flex: none; } */
   /* Target readout below the title, in yellow — replaces the label that used
      to float on the dashed price line itself. */
   .btc-target-label {
@@ -697,9 +751,9 @@
   .trade-label {
     position: absolute;
     width: 110px;
-    background: #1c2f3b;
+    background: var(--card-hover);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 5px 7px;
     font-size: 10px;
     line-height: 1.5;
@@ -720,8 +774,9 @@
      overflow:hidden clips the header background + tables to the rounded
      corners, and keeps the mobile collapse height-animation contained. ── */
   .section {
+    background: var(--card);   /* was transparent — cards need the lifted surface */
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 14px;
     overflow: hidden;
   }
   .section-header {
@@ -733,22 +788,22 @@
     border-bottom: 1px solid var(--border);
   }
   .section-title {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    color: var(--text);          /* plain white titles, not accent-coloured */
+    text-transform: none;        /* reference uses sentence case, not caps */
+    letter-spacing: 0;
   }
 
   /* ── Tables ──────────────────────────────── */
   .positions-table { width: 100%; border-collapse: collapse; }
   .positions-table th {
     text-align: left;
-    padding: 8px 24px;
-    font-size: 10px;
+    padding: 9px 24px;
+    font-size: 11px;
     color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    text-transform: none;
+    letter-spacing: 0;
     background: var(--card);
     font-weight: 500;
   }
@@ -757,7 +812,7 @@
     border-top: 1px solid var(--border);
     font-size: 12px;
   }
-  .positions-table tr:hover td { background: rgba(39, 166, 154, 0.04); }
+  .positions-table tr:hover td { background: rgba(255, 255, 255, 0.03); }
   .side-yes { color: var(--green); font-weight: 700; }
   .side-no  { color: var(--red);   font-weight: 700; }
   /* Side column: keep arrow + YES/NO on one line, never wrap */
@@ -774,12 +829,15 @@
     height: 340px; overflow-y: auto;
     padding: 8px 0; background: var(--bg);
   }
+  /* The log stays MONOSPACE on purpose — it's aligned machine output where
+     timestamps and numbers should line up column-wise. The rest of the UI moved
+     to a proportional face; this panel is the one place that shouldn't. */
   .log-line {
-    padding: 2px 24px; font-size: 11px;
+    padding: 2px 24px; font-size: 11px; font-family: var(--font-mono);
     line-height: 1.7; color: var(--text-dim); white-space: nowrap;
   }
-  .log-line:hover { background: rgba(255,255,255,0.02); }
-  .log-line.signal     { color: var(--accent); }
+  .log-line.signal     { color: var(--accent-text); }
+  .log-line:hover      { background: rgba(255,255,255,0.03); }
   .log-line.open-trade { color: var(--green); }
   .log-line.exit-win   { color: var(--green); }
   .log-line.exit-loss  { color: var(--red); }
@@ -797,36 +855,53 @@
      rather than a generic ":last-child" border rule (named-area placement
      decouples visual order from DOM order, so "last child" no longer means
      "visually last"). */
+  /* BTC chart removed 2026-08-01 — the "chart" area is gone and Live Log now
+     spans the full first row. To restore the chart, put "chart history" back as
+     the first row and re-add the `chart` area. */
   .main-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    /* "positions" row removed 2026-08-01 with the Open Positions module. */
     grid-template-areas:
-      "chart      history"
-      "positions  positions"
+      "history    history"
       "poshistory poshistory";
     gap: 16px;
     padding: 16px 10px;
   }
   /* Each cell is now a standalone bordered card (see .section / .btc-chart-card);
      the grid `gap` provides the separation the old edge borders used to. */
-  .main-row > .btc-chart-card { grid-area: chart; min-width: 0; }
-  /* Height is matched to the chart card in JS (see syncHistoryHeightToChart),
-     not CSS — desktop only, applied/removed there based on viewport width. */
+  /* Chart card disabled 2026-08-01 — the `chart` area no longer exists above. */
+  /* .main-row > .btc-chart-card { grid-area: chart; min-width: 0; } */
   .main-row > .live-log-section { grid-area: history; min-width: 0; }
-  .main-row > .open-positions-section { grid-area: positions; min-width: 0; }
+  /* .main-row > .open-positions-section { grid-area: positions; min-width: 0; } */
   .main-row > .position-history-section { grid-area: poshistory; min-width: 0; }
 
   /* ── Mobile / narrow screens ─────────────────
      Stack the 50/50 grids, let wide tables scroll horizontally,
      and tighten paddings/fonts so everything fits a phone. */
   @media (max-width: 768px) {
-    /* Header wraps onto two lines: title on top, the btc-price / uptime /
-       connected row below spanning the full width so "connected" sits flush
-       at the far right. */
+    /* Header becomes TWO rows on mobile:
+         row 1 — logo, mode badge, ws status ......... avatar (pinned right)
+         row 2 — BTC price (full width, on its own)
+       .header-left is itself a wrapping flex container, so giving .header-status
+       flex-basis:100% forces it onto a new line WITHIN the left group; the
+       avatar stays beside row 1 because it lives in .header-right, a sibling.
+       Explicit `order` is what keeps ws-status up on row 1 — without it the
+       price's 100% basis would push ws-status down to a third row, since it
+       follows .header-status in DOM order. */
     .header { margin: 12px 12px 0; padding: 12px 14px; flex-wrap: wrap; gap: 8px 12px; }
-    .header-right { gap: 14px; width: 100%; justify-content: space-between; }
+    .header-left { flex: 1; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+    .header-right { gap: 14px; flex: 0 0 auto; }
+    .header-left .logo        { order: 1; }
+    .header-left .mode-badge  { order: 2; }
+    .header-left .ws-status   { order: 3; }
+    .header-left .header-status {
+      order: 4;
+      flex: 0 0 100%;
+    }
     .logo { font-size: 14px; }
     .btc-price { font-size: 16px; }
+    .avatar { width: 30px; height: 30px; }
 
     /* Modal: near-fullscreen sheet instead of a centered card */
     .modal-overlay { padding: 12px; }
@@ -838,9 +913,9 @@
     .stat-value { font-size: 19px; }
     .chart-wrap { min-height: 0; }
 
-    /* BTC candlestick keeps its own fixed height */
-    .btc-chart-card { height: 400px; }
-    .btc-chart-card .chart-wrap { height: 330px; }
+    /* BTC candlestick disabled 2026-08-01 — rules kept for restore */
+    /* .btc-chart-card { height: 400px; } */
+    /* .btc-chart-card .chart-wrap { height: 330px; } */
 
     /* Stack the main row in the ORIGINAL order regardless of the desktop
        swap above: chart → Open Positions → Position History → Live Log.
@@ -849,8 +924,10 @@
     .main-row { grid-template-columns: 1fr; grid-template-areas: none; }
     /* Single column: keep the desktop card borders, just reorder. The grid
        `gap` provides vertical spacing, so no per-section edge borders here. */
-    .main-row > .btc-chart-card { grid-area: auto; order: 1; }
-    .main-row > .open-positions-section { grid-area: auto; order: 2; }
+    /* .btc-chart-card and .open-positions-section are disabled (2026-08-01);
+       their rules are kept commented so restoring either keeps this order. */
+    /* .main-row > .btc-chart-card { grid-area: auto; order: 1; } */
+    /* .main-row > .open-positions-section { grid-area: auto; order: 2; } */
     .main-row > .position-history-section { grid-area: auto; order: 3; }
     .main-row > .live-log-section { grid-area: auto; order: 4; }
     /* JS only measures/applies the matched height above 768px (see
@@ -918,14 +995,14 @@
 
 <!-- Header -->
 <div class="header">
+  <!-- 2026-08-01: BTC price + connection status moved into the LEFT group
+       (they used to sit on the right alongside a "15M AI BOT" jump button,
+       which was removed). The right group now holds only the Polymarket
+       account avatar, served from the repo root as a static file. -->
   <div class="header-left">
-    <span class="logo">POLYMARKET BTC 5MIN</span>
+    <span class="logo">PolymarketGo</span>
     <span class="mode-badge" id="mode">PAPER</span>
-  </div>
-  <div class="header-right">
-    <a class="btn-15m" href="https://polymarket-strategy003.aurcloud.cc/"
-       target="_blank" rel="noopener" title="跳转到 15M AI BOT">15M AI BOT</a>
-    <div>
+    <div class="header-status">
       <span class="conn-dot off" id="btcDot"></span>
       <span class="btc-price" id="btcPrice">--</span>
     </div>
@@ -934,9 +1011,18 @@
       <span id="wsLabel">disconnected</span>
     </div>
   </div>
+  <div class="header-right">
+    <!-- Static file: pol-profile-pic.png in the repo root, served by
+         web/server.py at /avatar.png. onerror hides it so a missing file
+         leaves no broken-image icon. -->
+    <img class="avatar" id="avatar" src="/avatar.png" alt="Polymarket 账户头像"
+         onerror="this.hidden = true">
+  </div>
 </div>
 
-<!-- Total deposits + Polymarket's official UTC time -->
+<!-- DISABLED 2026-08-01: the whole info-row (Total Deposits + UTC Time).
+     Restore by uncommenting this block, the render() code that fills
+     #totalDeposits, the _tickUtcClock() block, and the .info-* CSS rules.
 <div class="info-row">
   <div class="info-item">
     <span class="info-label">Total Deposits</span>
@@ -947,8 +1033,11 @@
     <span class="info-value" id="utcClock">--:--:--</span>
   </div>
 </div>
+-->
 
-<!-- Optimization-record content modal (rendered markdown) -->
+
+<!-- DISABLED 2026-08-01: optimization-record modal (rendered markdown).
+     Nothing opens it now that /api/optimizations and loadOptimizations() are off.
 <div class="modal-overlay" id="docModal">
   <div class="modal-card doc-card">
     <div class="modal-header">
@@ -958,6 +1047,8 @@
     <div class="modal-body doc-body" id="docBody"></div>
   </div>
 </div>
+-->
+
 
 <!-- Password prompt for the pause/resume trading toggle -->
 <div class="modal-overlay" id="pauseModal">
@@ -1002,14 +1093,15 @@
 
   <!-- Right: Profit/Loss — line chart or daily calendar, switched by the
        icon pair in the header (see setPnlView()) -->
-  <!-- Starts in calendar-mode (the default view) — keep this class, the active
-       toggle button, and _pnlView's initial value in sync. -->
-  <div class="pnl-half calendar-mode" id="pnlHalf">
+  <!-- Starts in chart view at the 1W range (no calendar-mode class) — keep the
+       absence of that class, the active range button (1W), the active toggle
+       button, and _pnlRange/_pnlView's initial values in sync. -->
+  <div class="pnl-half" id="pnlHalf">
     <div class="pnl-header">
       <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
       <div class="pnl-ranges" id="pnlRanges">
-        <button type="button" data-range="1D" class="active">1D</button>
-        <button type="button" data-range="1W">1W</button>
+        <button type="button" data-range="1D">1D</button>
+        <button type="button" data-range="1W" class="active">1W</button>
         <button type="button" data-range="1M">1M</button>
         <button type="button" data-range="1Y">1Y</button>
         <button type="button" data-range="YTD">YTD</button>
@@ -1021,13 +1113,13 @@
         <button type="button" data-step="1" id="pnlMonthNext" aria-label="下一月">&#8250;</button>
       </div>
       <div class="pnl-view-toggle" id="pnlViewToggle">
-        <button type="button" data-view="chart" title="折线图" aria-label="折线图">
+        <button type="button" data-view="chart" class="active" title="折线图" aria-label="折线图">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M1.5 11.5 5 7l3 2.5 5.5-6"/>
           </svg>
         </button>
-        <button type="button" data-view="calendar" class="active" title="日历图" aria-label="日历图">
+        <button type="button" data-view="calendar" title="日历图" aria-label="日历图">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="1.8" y="2.8" width="12.4" height="11.4" rx="1.6"/>
@@ -1081,6 +1173,9 @@
      chart → Open Positions → Position History → Live Log order -->
 <div class="main-row">
 
+  <!-- DISABLED 2026-08-01: BTC/USDT candlestick chart module.
+       Restore by uncommenting this block, the JS block further down, and the
+       "chart" grid area in .main-row above.
   <div class="chart-card btc-chart-card">
     <div class="chart-header">
       <span class="chart-title">BTC/USDT · 5minute · CEX</span>
@@ -1096,6 +1191,8 @@
       <div class="trade-label-layer" id="btcLabelLayer"></div>
     </div>
   </div>
+  -->
+
 
   <div class="section live-log-section">
     <div class="section-header">
@@ -1105,6 +1202,9 @@
     <div class="log-container" id="logContainer"></div>
   </div>
 
+  <!-- DISABLED 2026-08-01: Open Positions module.
+       Restore by uncommenting this block, the render() code that fills #posBody,
+       and the "positions" grid area in .main-row above.
   <div class="section open-positions-section">
     <div class="section-header">
       <span class="section-title">Open Positions</span>
@@ -1113,14 +1213,16 @@
     <div class="table-scroll">
       <table class="positions-table">
         <thead>
-          <tr><th>Side</th><th>Entry</th><th>Qty</th><th>Hold</th><th>Stop</th><th>Expiry</th><th>Order</th></tr>
+          <tr><th>Side</th><th>Hold</th><th>Stop</th><th>Expiry</th></tr>
         </thead>
         <tbody id="posBody">
-          <tr><td colspan="7" class="empty-row">No open positions</td></tr>
+          <tr><td colspan="4" class="empty-row">No open positions</td></tr>
         </tbody>
       </table>
     </div>
   </div>
+  -->
+
 
   <div class="section position-history-section">
     <div class="section-header">
@@ -1130,10 +1232,11 @@
     <div class="history-container" id="historyContainer">
       <table class="positions-table">
         <thead>
-          <tr><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th><th>Order</th></tr>
+          <!-- Entry / Exit / Qty / Order columns removed 2026-08-01 (not worth the width) -->
+          <tr><th>Side</th><th>Hold</th><th>PnL</th><th>Result</th><th>Reason</th><th>Closed</th></tr>
         </thead>
         <tbody id="histBody">
-          <tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>
+          <tr><td colspan="6" class="empty-row">No closed positions yet</td></tr>
         </tbody>
       </table>
     </div>
@@ -1145,6 +1248,16 @@
 
 <script>
 const $ = id => document.getElementById(id);
+
+/* ═══ DISABLED 2026-08-01: BTC/USDT candlestick chart module ═══════════════
+   Everything from here to the "Portfolio + cumulative Profit/Loss" marker
+   below is the BTC chart: init, kline loading, live candle ticking, target
+   lines, and the trade-label/connector overlay drawn on top of it.
+   Disabled together with /api/klines + /api/price (web/server.py) and the
+   kline REST task (feeds/btc_price.py::start_feed).
+   NOTE: the LightweightCharts CDN <script> in <head> must STAY — the P&L
+   chart below still uses it.
+   To restore: remove this opening marker and the closing one below.
 
 // ── BTC 5m candlestick chart (exchange-style, live current candle + target lines) ──
 // One candle = one 5-min up/down market window.
@@ -1304,7 +1417,8 @@ async function loadBtcKlines() {
         _anchorBtcChartOnce();
       }
     }
-  } catch (e) { /* non-fatal — live candle still renders from the WS price */ }
+  } catch (e) { // non-fatal — live candle still renders from the WS price
+  }
   // Keep polling fast (3s) until the historical backfill arrives, then relax to 60s.
   clearTimeout(_btcKlineTimer);
   _btcKlineTimer = setTimeout(loadBtcKlines, got ? 60000 : 3000);
@@ -1600,6 +1714,8 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
   });
 }
 
+═══ end of disabled BTC chart module ═══════════════════════════════════ */
+
 // ── Portfolio + cumulative Profit/Loss widget, Polymarket style (two blocks) ──
 // The balance and the P&L curve are deliberately decoupled across the two blocks:
 //   - Left "Portfolio" block = the real-time wallet balance (live mode: on-chain
@@ -1613,12 +1729,13 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
 let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
-let _pnlRange = '1D';
-// Default view is the daily calendar; the curve is one tap away. Kept in sync
-// with the .calendar-mode class and the active toggle button in the markup.
+let _pnlRange = '1W';
+// Default view is the trend chart at the 1W range; the daily calendar is one
+// tap away. Kept in sync with the .calendar-mode class (absent by default), the
+// active range button (1W) and the active toggle button in the markup.
 // Declared here, not with the other calendar state further down, because
 // _renderPnlHeadline branches on it and may run before that block is evaluated.
-let _pnlView = 'calendar';    // 'chart' | 'calendar'
+let _pnlView = 'chart';    // 'chart' | 'calendar'
 let _accountBalance = 0;     // overwritten by the first successful d.account_balance
 let _balanceLoaded = false;   // true once a real (non-null) balance has ever arrived
 let _balanceStale = false;    // true when the latest payload's account_balance was null
@@ -1698,8 +1815,9 @@ function initPnlChart() {
     autoSize: true,
     layout: {
       background: { type: 'solid', color: 'transparent' },
-      textColor: '#7a9aaa',
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      // Matches --text-dim / --font in the :root palette.
+      textColor: '#8b8b96',
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       fontSize: 10,
     },
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
@@ -1712,7 +1830,7 @@ function initPnlChart() {
     timeScale: { visible: false, borderVisible: false, minBarSpacing: 0.001 },
     crosshair: {
       horzLine: { visible: false, labelVisible: false },
-      vertLine: { color: '#27a69a', width: 1, style: 3, labelVisible: false },
+      vertLine: { color: '#6b62ee', width: 1, style: 3, labelVisible: false },
     },
     handleScroll: false,
     handleScale: false,
@@ -1732,12 +1850,15 @@ function initPnlChart() {
     // (net profitable) and red below (net loss), independent of the wallet
     // balance shown in the headline above.
     baseValue: { type: 'price', price: 0 },
-    topLineColor: '#27a69a',
-    topFillColor1: 'rgba(39,166,154,0.35)',
-    topFillColor2: 'rgba(39,166,154,0.02)',
-    bottomLineColor: '#ef5350',
-    bottomFillColor1: 'rgba(239,83,80,0.02)',
-    bottomFillColor2: 'rgba(239,83,80,0.35)',
+    // Kept in step with --green / --red in the :root palette. Lightweight
+    // Charts takes colour strings, not CSS vars, so these are the literal
+    // values — update both together.
+    topLineColor: '#22c55e',
+    topFillColor1: 'rgba(34,197,94,0.30)',
+    topFillColor2: 'rgba(34,197,94,0.01)',
+    bottomLineColor: '#ef4444',
+    bottomFillColor1: 'rgba(239,68,68,0.01)',
+    bottomFillColor2: 'rgba(239,68,68,0.30)',
     lineWidth: 2,
     priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     priceLineVisible: false, // no dashed "last value" line across the chart — the price scale is hidden anyway
@@ -2017,7 +2138,8 @@ function _calCellTint(pnl, maxAbs) {
   // Floor of 0.10 so even the smallest day is visibly tinted, scaling to 0.45
   // at the month's largest absolute move.
   const a = (0.10 + 0.35 * Math.min(1, Math.abs(pnl) / maxAbs)).toFixed(3);
-  return pnl >= 0 ? `rgba(39,166,154,${a})` : `rgba(239,83,80,${a})`;
+  // Matches --green / --red in the :root palette.
+  return pnl >= 0 ? `rgba(34,197,94,${a})` : `rgba(239,68,68,${a})`;
 }
 
 function renderPnlCalendar() {
@@ -2194,12 +2316,12 @@ function syncHistoryHeightToChart() {
   logContainerEl.style.height = height + 'px';
 }
 
-window.addEventListener('resize', syncHistoryHeightToChart);
-window.addEventListener('load', syncHistoryHeightToChart);
-// Layout can still shift slightly after fonts/chart finish their first paint —
-// a couple of delayed re-checks catch that without needing a ResizeObserver.
-setTimeout(syncHistoryHeightToChart, 300);
-setTimeout(syncHistoryHeightToChart, 1000);
+// Disabled 2026-08-01 with the BTC chart — these only sized the Live Log to
+// match the chart card, and now no-op on every resize/load.
+// window.addEventListener('resize', syncHistoryHeightToChart);
+// window.addEventListener('load', syncHistoryHeightToChart);
+// setTimeout(syncHistoryHeightToChart, 300);
+// setTimeout(syncHistoryHeightToChart, 1000);
 
 // ── WebSocket ──────────────────────────────────
 let ws = null;
@@ -2223,15 +2345,26 @@ function connect() {
 
 // ── Render ─────────────────────────────────────
 function render(d) {
-  // Total deposits (manually maintained figure, see config.py TOTAL_DEPOSITS_USD)
-  if (d.total_deposits != null) {
-    $('totalDeposits').textContent = '$' + d.total_deposits.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
+  // Total Deposits readout disabled 2026-08-01 with the whole info-row.
+  // The backend still sends d.total_deposits; it's just not rendered.
+  // if (d.total_deposits != null) {
+  //   $('totalDeposits').textContent = '$' + d.total_deposits.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // }
 
-  // BTC
-  $('btcPrice').textContent = d.btc_price
+  // The header avatar is a plain static <img src="/avatar.png"> now — no JS
+  // needed here, and nothing to re-set on each render.
+
+  // BTC price — driven through the flip-counter reel (same mechanism as the
+  // P&L headline) so each tick rolls its changed digits instead of snapping.
+  // _setOdometerText is a no-op when the string is unchanged, so idle ticks
+  // cost nothing; it only rebuilds from scratch when the LENGTH changes
+  // (e.g. crossing $99,999.99 -> $100,000.00), where per-index digit matching
+  // wouldn't line up anyway.
+  const btcEl = $('btcPrice');
+  const btcText = d.btc_price
     ? '$' + d.btc_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '--';
+  _setOdometerText(btcEl, btcText);
   $('btcDot').className = 'conn-dot ' + (d.btc_connected ? 'on' : 'off');
 
   // Trading mode
@@ -2265,37 +2398,41 @@ function render(d) {
   // Position history (used by the history table below)
   const history = d.history || [];
 
-  // Open positions
-  const positions = d.positions || [];
+  // Open Positions module disabled 2026-08-01 — d.positions is still sent by the
+  // backend, just not rendered. Uncomment with the block below to restore.
+  // const positions = d.positions || [];
 
-  // BTC live 5m candlestick chart (current candle driven by the latest spot tick)
-  updateBtcChart(d.btc_price, d.btc_target, positions);
-  updateTradeMarkers(history);
+  // BTC chart disabled 2026-08-01 — see the commented JS block above.
+  // updateBtcChart(d.btc_price, d.btc_target, positions);
+  // updateTradeMarkers(history);
   updatePnlChart(d.pnl_series, d.account_balance, history);
-  syncHistoryHeightToChart();
+  // syncHistoryHeightToChart() matched the Live Log's height to the chart card;
+  // with the chart gone the log keeps its own CSS height. (The function itself
+  // already no-ops when .btc-chart-card is absent.)
+  // syncHistoryHeightToChart();
 
+  /* ═══ DISABLED 2026-08-01: Open Positions table rendering ═══════════════
+     Restore together with the #posBody markup and the "positions" grid area.
   $('posCount').textContent = positions.length;
   $('posBody').innerHTML = positions.length === 0
-    ? '<tr><td colspan="7" class="empty-row">No open positions</td></tr>'
+    ? '<tr><td colspan="4" class="empty-row">No open positions</td></tr>'
     : positions.map(p => {
         const cls = p.side === 'YES' ? 'side-yes' : 'side-no';
         const arrow = p.side === 'YES' ? '&#9650;' : '&#9660;';
         return `<tr>
           <td class="${cls}">${arrow} ${sideLabel(p.side)}</td>
-          <td>${p.entry.toFixed(3)}</td>
-          <td>${p.qty.toFixed(2)}</td>
           <td>${p.hold}s</td>
           <td>${p.stop.toFixed(3)}</td>
           <td>${p.expiry}s</td>
-          <td style="color:var(--text-dim);font-size:10px">${p.order_id}</td>
         </tr>`;
       }).join('');
+     ═══ end ═════════════════════════════════════════════════════════════ */
 
   // Position history
   $('histCount').textContent = history.length;
   const histBody = $('histBody');
   if (history.length === 0) {
-    histBody.innerHTML = '<tr><td colspan="10" class="empty-row">No closed positions yet</td></tr>';
+    histBody.innerHTML = '<tr><td colspan="6" class="empty-row">No closed positions yet</td></tr>';
   } else {
     const hc = $('historyContainer');
     const prev = hc.scrollTop;
@@ -2304,17 +2441,15 @@ function render(d) {
       const arrow = h.side === 'YES' ? '&#9650;' : '&#9660;';
       const pnlCls = h.pnl >= 0 ? 'positive' : 'negative';
       const resCls = h.result === 'WIN' ? 'positive' : h.result === 'LOSS' ? 'negative' : 'neutral';
+      // Entry / Exit / Qty / Order cells removed 2026-08-01 — keep in sync with
+      // the <thead> and the empty-row colspan above (6 columns).
       return `<tr>
         <td class="${cls}">${arrow} ${sideLabel(h.side)}</td>
-        <td>${h.entry.toFixed(3)}</td>
-        <td>${h.exit != null ? h.exit.toFixed(3) : '--'}</td>
-        <td>${h.qty.toFixed(2)}</td>
         <td>${h.hold}s</td>
         <td class="${pnlCls}">${h.pnl >= 0 ? '+' : ''}${h.pnl.toFixed(4)}</td>
         <td class="${resCls}">${h.result || '--'}</td>
         <td style="color:var(--text-dim)">${h.reason || ''}</td>
         <td>${fmtAgo(h.closed_ago)}</td>
-        <td style="color:var(--text-dim);font-size:10px">${h.order_id}</td>
       </tr>`;
     }).join('');
     hc.scrollTop = prev;
@@ -2358,7 +2493,11 @@ function fmtAgo(sec) {
   return Math.floor(sec / 86400) + '天前';
 }
 
-// ── Optimization-record doc modal ─────────────────
+/* ═══ DISABLED 2026-08-01: optimization-record doc modal ════════════════════
+   loadOptimizations() below was its only caller, so with that gone nothing can
+   open this. Its event bindings referenced #docModal / #docClose, which are now
+   commented out of the markup — leaving them live would throw on page load.
+
 const docModal = $('docModal');
 function openDoc(title, markdown) {
   $('docTitle').textContent = title;
@@ -2366,9 +2505,8 @@ function openDoc(title, markdown) {
   $('docBody').scrollTop = 0;
   docModal.classList.add('open');
 }
-let _autoOpenNum = null;  // track which optimization was auto-opened
+let _autoOpenNum = null;
 function closeDoc() {
-  // When closing an auto-opened optimization, mark as dismissed in localStorage
   if (_autoOpenNum !== null) {
     try { localStorage.setItem('dismissed_opt_' + _autoOpenNum, '1'); } catch (e) {}
     _autoOpenNum = null;
@@ -2377,15 +2515,19 @@ function closeDoc() {
 }
 $('docClose').addEventListener('click', closeDoc);
 docModal.addEventListener('click', e => { if (e.target === docModal) closeDoc(); });
+   ═══ end ═════════════════════════════════════════════════════════════════ */
 
-// Only the latest optimization record auto-pops up once per record
-// (per-record localStorage key) as a "what's new" notice.
+/* ═══ DISABLED 2026-08-01: /api/optimizations fetch + auto-popup ════════════
+   Pulled docs/optimizations/*.md on every page load and auto-opened the newest
+   record once per record. Restore together with the route in web/server.py, the
+   #docModal markup, and the marked.js CDN tag in <head>.
+
 async function loadOptimizations() {
   let recs = [];
   try {
     const res = await fetch('/api/optimizations');
     if (res.ok) recs = await res.json();
-  } catch (e) { /* no optimization records available */ }
+  } catch (e) { }
 
   if (recs.length > 0) {
     const latest = recs[recs.length - 1];
@@ -2397,6 +2539,7 @@ async function loadOptimizations() {
   }
 }
 loadOptimizations();
+   ═══ end ═════════════════════════════════════════════════════════════════ */
 
 // ── Trading pause/resume (password-gated) ─────────────────
 let _tradingPaused = false;
@@ -2447,11 +2590,12 @@ async function submitPauseToggle() {
 $('pauseModalConfirm').addEventListener('click', submitPauseToggle);
 $('pauseModalInput').addEventListener('keydown', e => { if (e.key === 'Enter') submitPauseToggle(); });
 
-// Unified Escape: close whichever modal is open.
+// Escape closes the pause modal. The doc-modal branch was dropped 2026-08-01
+// with that modal — `docModal` no longer exists, so testing it here would throw
+// on every Escape keypress.
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (docModal.classList.contains('open')) closeDoc();
-  else if (pauseModal.classList.contains('open')) closePauseModal();
+  if (pauseModal.classList.contains('open')) closePauseModal();
 });
 
 // Mobile: tap a section header (Position History / Open Positions / Live Log)
@@ -2466,8 +2610,13 @@ document.querySelectorAll('.section-header').forEach(h => {
 
 connect();
 
-// Polymarket's own UTC clock — plain UTC, no local-timezone offset (unlike
-// the chart's _fmtUtc8Time helper, which is UTC+8 for the candle labels).
+/* ═══ DISABLED 2026-08-01: UTC clock (1s setInterval) ══════════════════════
+   Restore together with the whole commented-out .info-row block (markup + CSS).
+   Note: this only removes the header READOUT. Everything else in the dashboard
+   still works in UTC — the P&L calendar buckets by UTC day (_utcDayKey) and the
+   5m markets settle on UTC boundaries; none of that goes through this function.
+
+// Polymarket's own UTC clock — plain UTC, no local-timezone offset.
 function _tickUtcClock() {
   const d = new Date();
   const hh = String(d.getUTCHours()).padStart(2, '0');
@@ -2477,12 +2626,16 @@ function _tickUtcClock() {
 }
 _tickUtcClock();
 setInterval(_tickUtcClock, 1000);
+   ═══ end ═══════════════════════════════════════════════════════════════ */
+
+/* ═══ DISABLED 2026-08-01: fast price ticker (700ms /api/price polling) ═════
+   This drove the live candle AND smoothed the header BTC price. With the chart
+   gone, the header price now updates from the 2s WebSocket broadcast (see
+   render(): $('btcPrice').textContent = d.btc_price ...) — less smooth, but
+   ~85 fewer HTTP requests per minute per open browser tab.
+   Restoring it requires re-enabling /api/price in web/server.py.
 
 // ── Fast price ticker (700ms) + smooth interpolation ────────────────
-// Polls /api/price at 700ms. Instead of jumping to the new price instantly,
-// we lerp from the previous price to the new one over ~600ms using
-// requestAnimationFrame with ease-out, so the candle and header price
-// glide smoothly between ticks.
 (function startFastTicker() {
   let _animFrom = null;     // price at animation start
   let _animTo = null;       // target price
@@ -2528,10 +2681,12 @@ setInterval(_tickUtcClock, 1000);
         const { p } = await res.json();
         if (p != null && isFinite(p)) _startAnim(p);
       }
-    } catch (e) { /* silent — WS broadcast is the primary source */ }
+    } catch (e) { // silent — WS broadcast is the primary source
+    }
   }
   setInterval(tick, 700);
 })();
+═══ end of disabled fast price ticker ══════════════════════════════════ */
 </script>
 </body>
 </html>

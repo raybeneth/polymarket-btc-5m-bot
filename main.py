@@ -471,12 +471,13 @@ def _build_web_state() -> dict:
     # resolve). Always available even when we hold no position, so the dashboard
     # can always show a target line — not only while a trade is open.
     # Cached per window so the target doesn't jitter as ticks enter/leave the buffer.
-    window_start = (int(now) // 300) * 300
-    btc_target = _target_cache.get(window_start)
-    if btc_target is None:
-        btc_target = btc_price.get_price_at(window_start)
-        if btc_target is not None:
-            _target_cache[window_start] = btc_target
+    # DISABLED 2026-08-01: the target line was a chart-only overlay.
+    # window_start = (int(now) // 300) * 300
+    # btc_target = _target_cache.get(window_start)
+    # if btc_target is None:
+    #     btc_target = btc_price.get_price_at(window_start)
+    #     if btc_target is not None:
+    #         _target_cache[window_start] = btc_target
 
     # Cumulative P&L over time for the dashboard's Profit/Loss chart.
     # Live mode: prefer Polymarket's own P&L series (authoritative — matches the
@@ -506,8 +507,11 @@ def _build_web_state() -> dict:
     return {
         "btc_price": btc_price.get_latest(),
         "btc_connected": btc_price.is_connected(),
-        "btc_history": btc_price.get_chart_series(),
-        "btc_target": round(btc_target, 2) if btc_target is not None else None,
+        # DISABLED 2026-08-01: both fields fed only the BTC candlestick chart,
+        # now commented out. btc_history in particular re-bucketed ~300 points
+        # on every 2s broadcast while no frontend code ever read it.
+        # "btc_history": btc_price.get_chart_series(),
+        # "btc_target": round(btc_target, 2) if btc_target is not None else None,
         "paper_trading": PAPER_TRADING,
         "trading_paused": web_server.is_trading_paused(),
         "total_deposits": TOTAL_DEPOSITS_USD,

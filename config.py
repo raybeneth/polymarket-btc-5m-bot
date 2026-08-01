@@ -67,6 +67,10 @@ TRADING_CONTROL_PASSWORD: str = os.getenv("TRADING_CONTROL_PASSWORD", "")
 # risk logic.
 TOTAL_DEPOSITS_USD: float = float(os.getenv("TOTAL_DEPOSITS_USD", "0.0"))
 
+# The dashboard header's avatar is NOT configured here — it's a static file in
+# the repo root (pol-profile-pic.png) served by web/server.py at /avatar.png.
+# Replace that file to change the picture; no config or restart-time value needed.
+
 
 # ──────────────────────────────────────────────
 # MYSQL — position storage
