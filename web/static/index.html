@@ -1101,11 +1101,11 @@
       <span class="pnl-title"><span class="pnl-dot"></span>Profit/Loss</span>
       <div class="pnl-ranges" id="pnlRanges">
         <button type="button" data-range="1D">1D</button>
-        <button type="button" data-range="1W" class="active">1W</button>
+        <button type="button" data-range="1W">1W</button>
         <button type="button" data-range="1M">1M</button>
         <button type="button" data-range="1Y">1Y</button>
         <button type="button" data-range="YTD">YTD</button>
-        <button type="button" data-range="ALL">ALL</button>
+        <button type="button" data-range="ALL" class="active">ALL</button>
       </div>
       <div class="pnl-month-nav" id="pnlMonthNav">
         <button type="button" data-step="-1" aria-label="上一月">&#8249;</button>
@@ -1729,10 +1729,9 @@ function _makeLabelDraggable(box, orderId, ax, ay, color, path) {
 let _pnlChart = null;
 let _pnlSeries = null;
 let _pnlFullSeries = [];   // full {t,v} chronological P&L series from the backend
-let _pnlRange = '1W';
-// Default view is the trend chart at the 1W range; the daily calendar is one
-// tap away. Kept in sync with the .calendar-mode class (absent by default), the
-// active range button (1W) and the active toggle button in the markup.
+let _pnlRange = 'ALL';   // keep in sync with the .active range button in the markup
+// Default view is the daily calendar; the curve is one tap away. Kept in sync
+// with the .calendar-mode class and the active toggle button in the markup.
 // Declared here, not with the other calendar state further down, because
 // _renderPnlHeadline branches on it and may run before that block is evaluated.
 let _pnlView = 'chart';    // 'chart' | 'calendar'
@@ -1822,9 +1821,9 @@ function initPnlChart() {
     },
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     rightPriceScale: { visible: false },
-    // minBarSpacing defaults to ~0.5px — with the spline interpolation below
-    // inflating point count up to 10x, a narrow mobile width can hit that
-    // floor before fitContent() finishes compressing, clipping the earliest
+    // minBarSpacing defaults to ~0.5px — with the spline stage below inflating
+    // a sparse range's point count up to 12x, a narrow mobile width can hit
+    // that floor before fitContent() finishes compressing, clipping the earliest
     // part of the curve out of view (scrolling is off, so it's unrecoverable).
     // Allow arbitrarily tight spacing so the full start-to-end trend always fits.
     timeScale: { visible: false, borderVisible: false, minBarSpacing: 0.001 },
@@ -1871,8 +1870,12 @@ function initPnlChart() {
       _renderPnlHeadline();
       return;
     }
-    const point = param.seriesData.get(_pnlSeries);
-    if (point) _renderPnlHeadline(point.value, param.time);
+    // Read the value off the raw series, not the crosshair's point: the curve
+    // under the cursor is smoothed, and a headline dollar figure has to be a
+    // real one. The dot may therefore sit a hair off the number it reports.
+    if (!param.seriesData.get(_pnlSeries)) { _renderPnlHeadline(); return; }
+    const raw = _nearestRawPnl(param.time);
+    if (raw) _renderPnlHeadline(raw.v, raw.t);
     else _renderPnlHeadline();
   });
 }
@@ -1950,13 +1953,43 @@ function _renderPnlHeadline(hoverValue, hoverTime) {
 }
 
 // Lightweight Charts only ever draws straight segments between the points you
-// give it — there's no built-in spline/curve option. To get an actual curved
-// line instead of a polyline, densify the real points with a Catmull-Rom
-// spline first; the straight segments between the (now much closer together)
-// interpolated points read as smooth at chart scale. The underlying data is
-// still a step function (each trade closes and the total jumps instantly) —
-// this is purely a visual smoothing to match the requested curved look.
-function _splineInterpolate(points, segmentsPerGap = 10) {
+// give it — there's no built-in spline/curve option — and the raw P&L series is
+// a step function (each closed trade jumps the total instantly), so plotted as
+// given it reads as a hard, jagged polyline. Two independent things cause that
+// look, so smoothing is two-stage:
+//   1. Low-pass the VALUES with a centred moving average. On a busy range
+//      (hundreds of trades, several points per pixel) the folds come from
+//      trade-to-trade jitter, not from segment count — densifying cannot help
+//      there, only filtering can. The window scales with the point count, so a
+//      quiet 1D range stays close to the true line while ALL gets fully rounded.
+//   2. Densify sparse ranges with a cardinal spline. With only a handful of
+//      points the long straight legs show a visible corner at every knot;
+//      interpolating between them turns those corners into curves.
+// Both stages are cosmetic. Every number on screen — the range's net change and
+// the hover readout — is resolved against the raw series instead (see
+// _renderPnlHeadline and _nearestRawPnl), so no displayed figure is ever a
+// smoothed one.
+const PNL_SPLINE_MAX_POINTS = 150;   // beyond this the data is dense enough that stage 1 alone reads smooth
+
+function _movingAverage(points) {
+  if (points.length < 5) return points;
+  const half = Math.min(40, Math.max(1, Math.round(points.length / 80)));
+  const out = [];
+  for (let i = 0; i < points.length; i++) {
+    // Shrink the window towards the edges rather than padding, so the first and
+    // last plotted points keep their true values — the ends of the curve are
+    // what the eye lines up against the headline figure.
+    const w = Math.min(half, i, points.length - 1 - i);
+    let sum = 0;
+    for (let k = i - w; k <= i + w; k++) sum += points[k].value;
+    out.push({ time: points[i].time, value: sum / (2 * w + 1) });
+  }
+  return out;
+}
+
+// Cardinal spline. tension 0.5 is plain Catmull-Rom; a little under that keeps
+// sharp steps bowing gently instead of overshooting into visible hooks.
+function _splineInterpolate(points, segmentsPerGap = 10, tension = 0.4) {
   if (points.length < 3) return points;
   const out = [points[0]];
   for (let i = 0; i < points.length - 1; i++) {
@@ -1964,20 +1997,41 @@ function _splineInterpolate(points, segmentsPerGap = 10) {
     const p1 = points[i];
     const p2 = points[i + 1];
     const p3 = points[i + 2] || p2;
+    const m1 = tension * (p2.value - p0.value);   // Hermite tangents at each end of the segment
+    const m2 = tension * (p3.value - p1.value);
     for (let s = 1; s <= segmentsPerGap; s++) {
       const t = s / segmentsPerGap, t2 = t * t, t3 = t2 * t;
-      const value = 0.5 * (
-        2 * p1.value +
-        (p2.value - p0.value) * t +
-        (2 * p0.value - 5 * p1.value + 4 * p2.value - p3.value) * t2 +
-        (3 * p1.value - p0.value - 3 * p2.value + p3.value) * t3
-      );
+      const value =
+        (2 * t3 - 3 * t2 + 1) * p1.value +
+        (t3 - 2 * t2 + t) * m1 +
+        (-2 * t3 + 3 * t2) * p2.value +
+        (t3 - t2) * m2;
       const time = Math.round(p1.time + (p2.time - p1.time) * t);
       const last = out[out.length - 1];
       if (time > last.time) out.push({ time, value });   // keep times strictly increasing
     }
   }
   return out;
+}
+
+function _smoothPnlCurve(points) {
+  const filtered = _movingAverage(points);
+  return filtered.length <= PNL_SPLINE_MAX_POINTS
+    ? _splineInterpolate(filtered, 12)
+    : filtered;
+}
+
+// Nearest real (unsmoothed) point to a chart x-position. The plotted curve is
+// cosmetically smoothed, so the hover readout resolves back to the raw series —
+// the dollar figure shown is always one the account actually reached.
+function _nearestRawPnl(time) {
+  if (!_pnlFullSeries.length) return null;
+  let best = _pnlFullSeries[0], bestGap = Math.abs(best.t - time);
+  for (const p of _pnlFullSeries) {
+    const gap = Math.abs(p.t - time);
+    if (gap < bestGap) { best = p; bestGap = gap; }
+  }
+  return best;
 }
 
 function applyPnlRange(range) {
@@ -1990,7 +2044,7 @@ function applyPnlRange(range) {
   // render, so seed a flat "no P&L yet" line at 0 if this range has no
   // closed trades rather than leaving it blank.
   const data = inRange.length
-    ? _splineInterpolate(inRange.map(p => ({ time: p.t, value: p.v })))
+    ? _smoothPnlCurve(inRange.map(p => ({ time: p.t, value: p.v })))
     : [{ time: cutoff || Math.floor(Date.now() / 1000), value: 0 }];
   _pnlSeries.setData(data);
   _pnlChart.timeScale().fitContent();
