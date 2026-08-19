@@ -62,6 +62,13 @@ _score_history: deque = deque(maxlen=200)
 _skip_stats: dict = {
     "neutral": 0, "noise_skip": 0, "weak_skip": 0, "low": 0, "med": 0, "high": 0,
     "reversal_guard": 0, "momentum_floor": 0,
+    # Downstream gates (odds/timing/spread/chase/combined) in main.py.
+    # Added 2026-08-19: on 08-17/18 the direction stage pushed 2000+ signals
+    # per day into weak_skip — the same volume as 08-13, which fired 30 trades
+    # — yet 0-1 tiers were assigned. Everything died in these five gates, all
+    # of which only log.debug and so leave no trace under LOG_LEVEL=INFO.
+    "odds_skip": 0, "timing_skip": 0, "spread_skip": 0, "chase_skip": 0,
+    "combined_skip": 0, "no_ask_skip": 0,
 }
 
 

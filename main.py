@@ -298,30 +298,36 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     book = yes_book if side == "YES" else no_book
     entry_price = book.best_ask
     if entry_price is None:
+        direction.record_skip("no_ask_skip")
         log.debug(f"[{mid}] 跳过: {side} 无卖一价")
         return
 
     # Filter 2: Odds
     odds_result = odds.check(entry_price, direction_strength=dir_result.score)
     if not odds_result.passed:
+        direction.record_skip("odds_skip")
         log.debug(f"[{mid}] 跳过赔率: 价格 {entry_price:.3f} 被拒绝")
         return
 
     # Filter 3: Timing
     timing_result = timing.check(elapsed, remaining)
     if not timing_result.passed:
+        direction.record_skip("timing_skip")
         log.debug(f"[{mid}] 跳过时机: 已过{elapsed:.0f}s 剩余{remaining:.0f}s")
         return
     if MIN_TIMING_FILTER_SCORE_ENABLED and timing_result.score < MIN_TIMING_FILTER_SCORE:
+        direction.record_skip("timing_skip")
         log.debug(f"[{mid}] 跳过时机下限: {timing_result.score:.0f} < {MIN_TIMING_FILTER_SCORE:.0f}")
         return
 
     # Filter 4: Spread (pass/fail gate + score floor)
     spread_result = spread.check(book, side)
     if not spread_result.passed:
+        direction.record_skip("spread_skip")
         log.debug(f"[{mid}] 跳过价差: {spread_result.reason}")
         return
     if spread_result.score < MIN_SPREAD_FILTER_SCORE:
+        direction.record_skip("spread_skip")
         log.debug(
             f"[{mid}] 跳过价差评分过低: {spread_result.score:.0f} < {MIN_SPREAD_FILTER_SCORE:.0f} "
             f"(流动性差/价差过宽)"
@@ -331,6 +337,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     # Filter 5: Chase (pass/fail gate, no score contribution)
     chase_result = chase.check(book)
     if not chase_result.passed:
+        direction.record_skip("chase_skip")
         log.debug(f"[{mid}] 跳过追单: {chase_result.reason}")
         return
 
@@ -346,6 +353,7 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         if SCORE_WEIGHTS[name] > 0
     )
     if combined_score < MIN_COMBINED_SCORE:
+        direction.record_skip("combined_skip")
         log.debug(f"[{mid}] 跳过综合评分: {combined_score:.1f} < {MIN_COMBINED_SCORE}")
         return
 
@@ -719,6 +727,9 @@ async def main_loop() -> None:
                     f"NEUTRAL={stats['neutral']} 噪声跳过={stats['noise_skip']} "
                     f"弱信号跳过={stats['weak_skip']} 动能不足跳过={stats['momentum_floor']} "
                     f"反转拦截={stats['reversal_guard']} | "
+                    f"赔率={stats['odds_skip']} 时机={stats['timing_skip']} "
+                    f"价差={stats['spread_skip']} 追单={stats['chase_skip']} "
+                    f"综合={stats['combined_skip']} 无卖一={stats['no_ask_skip']} | "
                     f"成交 LOW={stats['low']} MED={stats['med']} HIGH={stats['high']} (共{fired}笔)"
                 )
                 _last_stats_report = now_ts
