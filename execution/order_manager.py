@@ -59,17 +59,71 @@ log = logging.getLogger(__name__)
 _clob_client = None
 _clob_client_lock = asyncio.Lock()
 
+# Backoff for failed client construction. AsyncSecureClient.create() performs
+# network I/O (credential derivation against POST /auth/api-key), so when the
+# CLOB is unhealthy it fails by *timeout* — ~10s per attempt, not instantly.
+# Without this gate every caller re-ran the full handshake and paid that 10s
+# again; since reconcile_positions() is awaited from the main loop, a sustained
+# CLOB outage stalled the loop rather than degrading gracefully. Observed
+# 2026-08-19: the CLOB accepted the HTTP/2 handshake, ACKed SETTINGS, then never
+# sent response headers for the signed POST — client-side there is nothing to
+# fix, so the only sane response is to stop hammering it.
+_CLOB_CLIENT_RETRY_COOLDOWN = 60.0
+_clob_client_last_failure = 0.0
+
+
+def _describe_exc(exc: BaseException) -> str:
+    """
+    Render an exception with its type and cause chain.
+
+    The polymarket client raises `TransportError(str(error) or "Request failed")`,
+    so a timeout — whose str() is empty — collapses to the bare literal
+    "Request failed" with no type, no cause and no URL. Logging just `{exc}`
+    therefore made a CLOB read-timeout indistinguishable from any other
+    transport fault; this keeps the underlying httpx/httpcore type visible.
+    """
+    parts = [f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__]
+    cause = exc.__cause__
+    depth = 0
+    while cause is not None and depth < 3:
+        label = type(cause).__name__
+        parts.append(f"{label}: {cause}" if str(cause) else label)
+        cause = cause.__cause__
+        depth += 1
+    return " <- ".join(parts)
+
 
 async def _get_clob_client():
-    global _clob_client
+    """
+    Lazily build the shared CLOB client.
+
+    Raises RuntimeError while inside the post-failure cooldown so callers get a
+    cheap, immediate error instead of each re-paying the ~10s handshake timeout.
+    """
+    global _clob_client, _clob_client_last_failure
     if _clob_client is None:
         async with _clob_client_lock:
             if _clob_client is None:  # re-check: another coroutine may have won the race
+                since_failure = time.time() - _clob_client_last_failure
+                if since_failure < _CLOB_CLIENT_RETRY_COOLDOWN:
+                    raise RuntimeError(
+                        f"CLOB客户端初始化冷却中，还需"
+                        f"{_CLOB_CLIENT_RETRY_COOLDOWN - since_failure:.0f}s"
+                    )
                 from polymarket import AsyncSecureClient
-                _clob_client = await AsyncSecureClient.create(
-                    private_key=PRIVATE_KEY,
-                    wallet=FUNDER_ADDRESS or None,
-                )
+                try:
+                    _clob_client = await AsyncSecureClient.create(
+                        private_key=PRIVATE_KEY,
+                        wallet=FUNDER_ADDRESS or None,
+                    )
+                except BaseException as exc:
+                    _clob_client_last_failure = time.time()
+                    log.warning(
+                        f"[实盘] CLOB客户端初始化失败，{_CLOB_CLIENT_RETRY_COOLDOWN:.0f}s内不再重试: "
+                        f"{_describe_exc(exc)}"
+                    )
+                    raise
+                _clob_client_last_failure = 0.0
     return _clob_client
 
 
@@ -107,7 +161,7 @@ async def get_wallet_balance_usdc() -> Optional[float]:
         resp = await client.get_balance_allowance(asset_type="COLLATERAL")
         return resp.balance / 1_000_000 if resp.balance is not None else None  # USDC = 6 decimals
     except Exception as exc:
-        log.warning(f"[实盘] 查询钱包USDC余额失败: {exc}")
+        log.warning(f"[实盘] 查询钱包USDC余额失败: {_describe_exc(exc)}")
         return None
 
 
@@ -141,7 +195,7 @@ async def _fetch_funder_onchain_balance(session: aiohttp.ClientSession) -> Optio
             return None
         return int(result, 16) / 1_000_000  # USDC = 6 decimals
     except Exception as exc:
-        log.warning(f"[实盘] 链上查询钱包USDC余额失败: {exc}")
+        log.warning(f"[实盘] 链上查询钱包USDC余额失败: {_describe_exc(exc)}")
         return None
 
 
@@ -311,7 +365,7 @@ async def _live_execute(decision: TradeDecision) -> bool:
             side="BUY",
         )
     except Exception as exc:
-        log.error(f"[实盘] 订单提交失败: {exc}")
+        log.error(f"[实盘] 订单提交失败: {_describe_exc(exc)}")
         return False
 
     if not response.ok:
@@ -522,7 +576,7 @@ async def _submit_exit(state, pos, exit_reason: str, best_bid: float) -> None:
         }
         log.info(f"[实盘] {exit_reason} 卖单已提交 {pos.order_id} -> {sell_order_id} @ {best_bid:.3f}")
     except Exception as exc:
-        log.warning(f"[实盘] {exit_reason} 卖出提交失败 {pos.order_id}: {exc}")
+        log.warning(f"[实盘] {exit_reason} 卖出提交失败 {pos.order_id}: {_describe_exc(exc)}")
 
 
 async def _poll_pending_exits(state) -> None:
@@ -541,7 +595,7 @@ async def _poll_pending_exits(state) -> None:
             size_matched = float(status.size_matched or 0)
             fill_price = float(status.price or 0)
         except Exception as exc:
-            log.warning(f"[实盘] 查询卖单状态失败 {sell_order_id}: {exc}")
+            log.warning(f"[实盘] 查询卖单状态失败 {sell_order_id}: {_describe_exc(exc)}")
             continue
 
         if status_val == "matched" or size_matched >= pos.shares - 1e-6:
@@ -712,7 +766,7 @@ async def reconcile_positions(session: aiohttp.ClientSession) -> None:
         # on-chain positions — client.signer (the EOA) does not.
         wallet = client.wallet
     except Exception as exc:
-        log.warning(f"[对账] 无法获取钱包地址: {exc}")
+        log.warning(f"[对账] 无法获取钱包地址: {_describe_exc(exc)}")
         return
 
     try:
