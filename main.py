@@ -94,9 +94,12 @@ _wallet_balance: Optional[float] = None
 # Live mode's cumulative P&L series straight from Polymarket's own P&L API
 # (see feeds.polymarket_clob.fetch_user_pnl_series), polled periodically so the
 # dashboard's Profit/Loss curve/number match polymarket.com exactly. None until
-# the first successful fetch; paper mode leaves it None and uses the locally
-# computed series instead.
+# the first successful fetch — live mode never falls back to the local series,
+# the dashboard shows a loading state instead. Paper mode leaves it None and
+# uses the locally computed series.
 _pnl_series_remote: Optional[list] = None
+# True when the latest live-mode fetch failed; the last good series is kept.
+_pnl_series_stale: bool = False
 
 
 def _btc_entry_ready() -> tuple[bool, str]:
@@ -488,11 +491,12 @@ def _build_web_state() -> dict:
     #         _target_cache[window_start] = btc_target
 
     # Cumulative P&L over time for the dashboard's Profit/Loss chart.
-    # Live mode: prefer Polymarket's own P&L series (authoritative — matches the
+    # Live mode: Polymarket's own P&L series only (authoritative — matches the
     # site's widget exactly, and unlike the local figure it accounts for trades
-    # the bot never recorded, on-chain settlements, and fees). Fall back to the
-    # locally-computed series in paper mode or before the first remote fetch.
-    if not PAPER_TRADING and _pnl_series_remote:
+    # the bot never recorded, on-chain settlements, and fees). No local
+    # fallback: None until the first fetch lands, and the dashboard shows a
+    # loading state. Paper mode: computed from the local positions table.
+    if not PAPER_TRADING:
         pnl_series = _pnl_series_remote
     else:
         # _recent_closed is newest-first (closed_at DESC); walk it in chronological
@@ -539,6 +543,7 @@ def _build_web_state() -> dict:
         },
         "positions": positions,
         "pnl_series": pnl_series,
+        "pnl_series_stale": (not PAPER_TRADING) and _pnl_series_stale,
         "history": [
             {
                 "side": h["side"],
@@ -552,11 +557,6 @@ def _build_web_state() -> dict:
                 "hold": int(h["closed_at"] - h["opened_at"]) if h["closed_at"] and h["opened_at"] else 0,
                 "closed_ago": int(now - h["closed_at"]) if h["closed_at"] else 0,
                 "opened_at": h["opened_at"],
-                # Absolute close timestamp (not just closed_ago) so the
-                # dashboard's daily-P&L calendar can bucket each trade into the
-                # right UTC day — a relative age would drift with clock skew and
-                # could file a trade under the wrong day near UTC midnight.
-                "closed_at": h["closed_at"],
                 "order_id": h["order_id"],
             }
             for h in _recent_closed
@@ -566,7 +566,7 @@ def _build_web_state() -> dict:
 
 
 async def main_loop() -> None:
-    global _history, _start_time, _recent_closed, _last_stats_report, _wallet_balance, _pnl_series_remote
+    global _history, _start_time, _recent_closed, _last_stats_report, _wallet_balance, _pnl_series_remote, _pnl_series_stale
     _start_time = time.time()
     _last_stats_report = _start_time
 
@@ -663,6 +663,7 @@ async def main_loop() -> None:
                     remote_pnl = await fetch_user_pnl_series(session, FUNDER_ADDRESS)
                     if remote_pnl is not None:
                         _pnl_series_remote = remote_pnl
+                    _pnl_series_stale = remote_pnl is None
                 # Periodic on-chain reconciliation (live mode only) — catches desync
                 # from partial fills, crashes mid-order, or unconfirmed sells that
                 # this loop's own bookkeeping can't detect on its own.

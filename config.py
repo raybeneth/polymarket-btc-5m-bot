@@ -51,7 +51,7 @@ PUSD_CONTRACT_ADDRESS: str = os.getenv(
 # ──────────────────────────────────────────────
 # OPERATIONAL MODE
 # ──────────────────────────────────────────────
-PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
+PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() == "false"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 # Dashboard "pause/resume trading" button (web/server.py's /api/trading/toggle)
