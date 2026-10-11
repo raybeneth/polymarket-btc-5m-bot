@@ -45,15 +45,17 @@ from config import (
     ENTRY_CONFIRM_MAX_ADVERSE_PCT,
     TIMING_MIN_REMAINING,
     TOTAL_DEPOSITS_USD,
+    FAIR_VALUE_MODE,
+    FAIR_VALUE_MIN_EDGE,
     TradeDecision,
 )
-from feeds import btc_price
+from feeds import btc_price, chainlink_price
 from config import FUNDER_ADDRESS
 from feeds.polymarket_clob import (
     run_scanner, get_active_markets, fetch_both_books, create_session,
     fetch_user_pnl_series,
 )
-from filters import odds, timing, spread, chase, direction
+from filters import odds, timing, spread, chase, direction, fair_value
 from execution import order_manager
 from execution.risk import get_state
 from storage import db
@@ -139,6 +141,29 @@ def _btc_entry_ready() -> tuple[bool, str]:
             )
 
     return False, f"动量过强 {vel_20s:.3%}，继续等待"
+
+
+def _fair_value_blocks(fv, mid: str, stage: str) -> bool:
+    """
+    Apply FAIR_VALUE_MODE to a fair_value.check() result. Returns True when
+    the trade must be skipped. "shadow" only logs; "gate" also skips trades
+    without a computable fair value or with edge below FAIR_VALUE_MIN_EDGE.
+    """
+    if FAIR_VALUE_MODE not in ("shadow", "gate"):
+        return False
+    edge = fv.details.get("edge")
+    log.info(f"[{mid}] 公允价值({stage}, {FAIR_VALUE_MODE}): {fv.reason}")
+    if FAIR_VALUE_MODE != "gate":
+        return False
+    if not fv.passed or edge is None:
+        direction.record_skip("edge_skip")
+        log.info(f"[{mid}] 跳过: 无法计算公允概率 ({stage})")
+        return True
+    if edge < FAIR_VALUE_MIN_EDGE:
+        direction.record_skip("edge_skip")
+        log.info(f"[{mid}] 跳过: edge {edge:+.3f} < {FAIR_VALUE_MIN_EDGE:.3f} ({stage})")
+        return True
+    return False
 
 
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
@@ -235,6 +260,12 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
             log.debug(f"[{mid}] 动量就绪后反转哨兵拦截: {side2} move={rev_details.get('move_pct')}%")
             return
 
+        fv2 = fair_value.check(market.end_timestamp, side2, current_price)
+        if _fair_value_blocks(fv2, mid, "入场"):
+            return
+        if FAIR_VALUE_MODE in ("shadow", "gate"):
+            pending_decision.filter_results["fair_value"] = fv2
+
         pending_decision.entry_price = current_price
         pending_decision.tick_size = book2.tick_size
         pending_decision.min_order_size = book2.min_order_size or 0.0
@@ -305,12 +336,26 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         log.debug(f"[{mid}] 跳过: {side} 无卖一价")
         return
 
-    # Filter 2: Odds
-    odds_result = odds.check(entry_price, direction_strength=dir_result.score)
+    # Filter 2: Odds. In FAIR_VALUE_MODE="gate" only the hard price bounds
+    # (ODDS_MIN_PRICE / ODDS_MAX_PRICE) apply as guardrails, and the score is
+    # replaced below by the fair-value edge score — a price is good when it is
+    # below our fair probability, not when it is close to 0.50.
+    odds_strength = 100.0 if FAIR_VALUE_MODE == "gate" else dir_result.score
+    odds_result = odds.check(entry_price, direction_strength=odds_strength)
     if not odds_result.passed:
         direction.record_skip("odds_skip")
         log.debug(f"[{mid}] 跳过赔率: 价格 {entry_price:.3f} 被拒绝")
         return
+
+    # Fair value vs. the Chainlink window start price (filters/fair_value.py).
+    fv_result = None
+    if FAIR_VALUE_MODE in ("shadow", "gate"):
+        fv_result = fair_value.check(market.end_timestamp, side, entry_price)
+        if _fair_value_blocks(fv_result, mid, "信号"):
+            return
+        if FAIR_VALUE_MODE == "gate":
+            odds_result.score = fair_value.edge_score(fv_result.details["edge"])
+            odds_result.reason = f"edge评分 — {fv_result.reason}"
 
     # Filter 3: Timing
     timing_result = timing.check(elapsed, remaining)
@@ -350,10 +395,14 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
         "direction": dir_result, "odds": odds_result, "timing": timing_result,
         "spread": spread_result, "chase": chase_result,
     }
+    if fv_result is not None:
+        # Recorded for analysis (positions.filter_scores = edge in cents);
+        # weight 0 — in gate mode its effect enters via the odds score.
+        filter_results["fair_value"] = fv_result
     combined_score = sum(
-        SCORE_WEIGHTS[name] * result.score
+        SCORE_WEIGHTS.get(name, 0.0) * result.score
         for name, result in filter_results.items()
-        if SCORE_WEIGHTS[name] > 0
+        if SCORE_WEIGHTS.get(name, 0.0) > 0
     )
     if combined_score < MIN_COMBINED_SCORE:
         direction.record_skip("combined_skip")
@@ -461,7 +510,8 @@ def _build_web_state() -> dict:
             tgt_key = int(pos.market_end_ts - 300)
             target = _target_cache.get(tgt_key)
             if target is None:
-                target = btc_price.get_price_at(pos.market_end_ts - 300)
+                target = (chainlink_price.get_price_at(pos.market_end_ts - 300)
+                          or btc_price.get_price_at(pos.market_end_ts - 300))
                 if target is not None:
                     _target_cache[tgt_key] = target
         else:
@@ -617,6 +667,7 @@ async def main_loop() -> None:
 
     # Start BTC price feed
     await btc_price.start_feed()
+    await chainlink_price.start_feed()
 
     async with create_session() as session:
         if not PAPER_TRADING:
@@ -645,7 +696,7 @@ async def main_loop() -> None:
                     if isinstance(result, Exception):
                         log.error(f"[{m.market_id[:10]}] evaluate_market 异常: {result!r}", exc_info=result)
                 await order_manager.check_early_exits(session)
-                await order_manager.resolve_expired_positions()
+                await order_manager.resolve_expired_positions(session)
                 # Full closed-history is only for the dashboard — refresh it
                 # every ~5 loops instead of every loop to keep the hot path lean.
                 if loop_count % 5 == 1:

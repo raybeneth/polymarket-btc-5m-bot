@@ -283,6 +283,59 @@ async def _fetch_active_markets(session: aiohttp.ClientSession) -> None:
     log.debug(f"市场扫描: {len(found)} 个新增/更新, {len(_active_markets)} 个活跃中")
 
 
+async def fetch_market_outcome(
+    session: aiohttp.ClientSession,
+    window_start: int,
+) -> Optional[str]:
+    """
+    Polymarket's own resolved outcome for the BTC 5m market whose window
+    starts at `window_start` — "UP", "DOWN", or None if not resolved yet /
+    unreachable. This is the authoritative result (Polymarket resolves these
+    markets on Chainlink BTC/USD), so paper settlement prefers it over any
+    price we recorded ourselves.
+
+    Only trusts a market that is closed AND whose outcomePrices are exactly
+    one 1 and one 0 — anything in between is a still-trading or disputed book.
+    """
+    import json as _json
+
+    slug = f"btc-updown-5m-{int(window_start)}"
+    try:
+        async with session.get(
+            f"{GAMMA_HOST}/markets",
+            params={"slug": slug},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
+                log.debug(f"结算结果查询失败 {slug}: HTTP {resp.status}")
+                return None
+            data = await resp.json()
+    except Exception as exc:
+        log.debug(f"结算结果查询异常 {slug}: {type(exc).__name__}: {exc}")
+        return None
+
+    markets_list = data if isinstance(data, list) else (data or {}).get("markets", [])
+    if not markets_list:
+        return None
+    m = markets_list[0]
+    if not m.get("closed"):
+        return None
+    try:
+        outcomes = _json.loads(m.get("outcomes") or "[]")
+        prices = [float(x) for x in _json.loads(m.get("outcomePrices") or "[]")]
+    except (TypeError, ValueError):
+        return None
+    if len(prices) != 2 or sorted(prices) != [0.0, 1.0]:
+        return None
+    winner = outcomes[prices.index(1.0)] if len(outcomes) == 2 else ("Up" if prices[0] == 1.0 else "Down")
+    winner = str(winner).strip().lower()
+    if winner in ("up", "yes"):
+        return "UP"
+    if winner in ("down", "no"):
+        return "DOWN"
+    return None
+
+
 async def run_scanner(session: aiohttp.ClientSession) -> None:
     """Background task: refresh market list every SCANNER_POLL_INTERVAL seconds."""
     while True:

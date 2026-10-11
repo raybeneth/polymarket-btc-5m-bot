@@ -69,6 +69,8 @@ _skip_stats: dict = {
     # of which only log.debug and so leave no trace under LOG_LEVEL=INFO.
     "odds_skip": 0, "timing_skip": 0, "spread_skip": 0, "chase_skip": 0,
     "combined_skip": 0, "no_ask_skip": 0,
+    # Fair-value edge gate (FAIR_VALUE_MODE="gate", filters/fair_value.py).
+    "edge_skip": 0,
 }
 
 

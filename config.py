@@ -84,6 +84,14 @@ SQLITE_PATH: str = os.getenv("SQLITE_PATH", "polymarket_bot.db")
 #   "binance" (default) | "okx"
 BTC_PRICE_SOURCE: str = os.getenv("BTC_PRICE_SOURCE", "binance").lower()
 
+# Chainlink BTC/USD — the price Polymarket's BTC 5m markets actually resolve
+# on, streamed from Polymarket's public Real-Time Data Socket (see
+# feeds/chainlink_price.py). Used for the window start price, paper-mode
+# settlement fallback, and the fair-value model. The exchange feed above stays
+# the momentum source (faster ticks).
+CHAINLINK_RTDS_URL: str = os.getenv("CHAINLINK_RTDS_URL", "wss://ws-live-data.polymarket.com")
+CHAINLINK_SYMBOL: str = os.getenv("CHAINLINK_SYMBOL", "btc/usd")
+
 # Master proxy switch. When True (default), feeds use the system HTTP_PROXY/
 # HTTPS_PROXY env vars if set (needed when Polymarket's CLOB returns HTTP 403
 # for this server's IP). When False, ALL feeds connect directly and ignore
@@ -397,6 +405,35 @@ MIN_TIMING_FILTER_SCORE: float = 35.0     # hard floor: timing score < 35 → sk
 # excludes #131 (timing=11.5) and #133 (timing=5.1); the other 5 losses in that
 # batch score 65-99 on timing and are caught by DIRECTION_MED_MIN_SCORE instead.
 MIN_TIMING_FILTER_SCORE_ENABLED: bool = os.getenv("MIN_TIMING_FILTER_SCORE_ENABLED", "true").lower() == "true"
+
+
+# ──────────────────────────────────────────────
+# FAIR VALUE / EDGE (Chainlink start price → P(Up))
+# ──────────────────────────────────────────────
+# The market pays $1 if Chainlink BTC/USD at window end >= window start.
+# Fair P(Up) ≈ Φ( ln(now/start) / (σ_per_s · √remaining) ), σ from recent
+# Chainlink (exchange as fallback) returns. Edge = fair prob of our side −
+# ask − FEE_PER_SHARE.
+#   FAIR_VALUE_MODE="gate"   → (default, paper AND live) skip trades whose edge
+#                              < FAIR_VALUE_MIN_EDGE, and the odds filter score
+#                              is replaced by an edge score (odds price bounds
+#                              stay as guardrails)
+#   FAIR_VALUE_MODE="shadow" → compute + log edge on every signal, never block
+#   FAIR_VALUE_MODE="off"    → disabled
+FAIR_VALUE_MODE: str = os.getenv("FAIR_VALUE_MODE", "gate").lower()
+FAIR_VALUE_MIN_EDGE: float = float(os.getenv("FAIR_VALUE_MIN_EDGE", "0.03"))
+FAIR_VALUE_EDGE_FULL: float = 0.15        # edge at which the edge score reaches 100
+FAIR_VALUE_VOL_LOOKBACK: int = 300        # seconds of returns used for σ
+FAIR_VALUE_VOL_FLOOR_PER_S: float = 0.00002   # σ floor per √s (~0.034% over 5 min)
+# Per-share trading cost assumed in the edge (taker fee etc). Verify against
+# Polymarket's current fee schedule for these markets and set accordingly.
+FEE_PER_SHARE: float = float(os.getenv("FEE_PER_SHARE", "0.0"))
+
+# Settlement bookkeeping (paper and live): prefer Polymarket's own resolved
+# outcome (Gamma API, which is what Chainlink decided). Wait up to this long
+# after expiry before falling back — paper: Chainlink feed, then exchange feed;
+# live: last trade price.
+PAPER_SETTLE_OUTCOME_WAIT_SECONDS: int = 180
 
 
 @dataclass

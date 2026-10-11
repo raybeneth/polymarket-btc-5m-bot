@@ -44,6 +44,7 @@ from config import (
     STOP_LOSS_RATIO,
     TAKE_PROFIT_DELTA,
     FORCE_EXIT_BEFORE_EXPIRY,
+    PAPER_SETTLE_OUTCOME_WAIT_SECONDS,
     TradeDecision,
 )
 from execution.risk import OpenPosition, get_state
@@ -824,16 +825,39 @@ async def reconcile_positions(session: aiohttp.ClientSession) -> None:
         log.info(f"[对账] 本地持仓与链上一致 ({len(tracked_by_token)} 个仓位)")
 
 
-async def resolve_expired_positions() -> None:
+# Paper settlement: last Gamma outcome query per order_id, to poll at most
+# every _OUTCOME_POLL_INTERVAL s while waiting for Polymarket to resolve.
+_outcome_last_poll: dict[str, float] = {}
+_OUTCOME_POLL_INTERVAL = 10.0
+
+
+def _outcome_from_prices(open_px: Optional[float], close_px: Optional[float]) -> Optional[str]:
+    """UP if close >= open (Polymarket's tie rule for these markets), else DOWN."""
+    if open_px is None or close_px is None:
+        return None
+    return "UP" if close_px >= open_px else "DOWN"
+
+
+async def resolve_expired_positions(session: Optional[aiohttp.ClientSession] = None) -> None:
     """
     Called periodically. Checks open positions whose market has expired
     and closes them at the settlement price (1.0 if won, 0.0 if lost).
 
-    In paper mode we use BTC price change during the market window to determine
-    the outcome (Up = BTC price went up, Down = BTC price went down).
-    In live mode Polymarket settles automatically and we just update our local state.
+    Paper mode decides the outcome the same way the real market does — by
+    Chainlink BTC/USD, not an exchange print. In order of preference:
+      1. Polymarket's own resolved outcome (Gamma API), polled for up to
+         PAPER_SETTLE_OUTCOME_WAIT_SECONDS after expiry;
+      2. our Chainlink feed's start/end price for the window;
+      3. the exchange feed (logged as a degraded fallback).
+    Near the start price exchange and Chainlink can disagree, which used to
+    record paper wins that were real losses (and vice versa).
+    In live mode Polymarket settles on-chain by itself; we only record the
+    result locally — at 1.0/0.0 from Polymarket's resolved outcome, falling
+    back to the last trade price only if the outcome isn't published within
+    PAPER_SETTLE_OUTCOME_WAIT_SECONDS.
     """
-    from feeds import btc_price
+    from feeds import btc_price, chainlink_price
+    from feeds.polymarket_clob import fetch_market_outcome
 
     state = get_state()
     now = time.time()
@@ -851,25 +875,59 @@ async def resolve_expired_positions() -> None:
                 continue
 
         if PAPER_TRADING:
-            # Determine outcome from BTC movement over the MARKET's own window,
-            # not the position's age: [market_end_ts - 300, market_end_ts].
-            # This is the same window Polymarket settles on, regardless of when
-            # within the window we actually entered.
+            outcome: Optional[str] = None
+            source = "unknown"
+            exch_outcome: Optional[str] = None
             if pos.market_end_ts > 0:
-                btc_open = btc_price.get_price_at(pos.market_end_ts - 300)
-                btc_close = btc_price.get_price_at(pos.market_end_ts)
+                window_start = pos.market_end_ts - 300
+                exch_outcome = _outcome_from_prices(
+                    btc_price.get_price_at(window_start),
+                    btc_price.get_price_at(pos.market_end_ts),
+                )
+                waited = now - pos.market_end_ts
+                if session is not None and waited < PAPER_SETTLE_OUTCOME_WAIT_SECONDS:
+                    last = _outcome_last_poll.get(pos.order_id, 0.0)
+                    if now - last < _OUTCOME_POLL_INTERVAL:
+                        continue
+                    _outcome_last_poll[pos.order_id] = now
+                    outcome = await fetch_market_outcome(session, int(window_start))
+                    if outcome is None:
+                        continue   # not resolved yet — retry next poll
+                    source = "polymarket"
+                if outcome is None:
+                    outcome = _outcome_from_prices(
+                        chainlink_price.get_price_at(window_start),
+                        chainlink_price.get_price_at(pos.market_end_ts),
+                    )
+                    source = "chainlink" if outcome else source
+                if outcome is None and exch_outcome is not None:
+                    outcome, source = exch_outcome, "exchange"
+                    log.warning(
+                        f"[模拟结算] {pos.order_id} 无 Polymarket 结果和 Chainlink 价格，"
+                        f"退回交易所价格判定 — 起始价附近可能与真实结算不一致"
+                    )
             else:
                 # Legacy fallback: approximate via position age
                 age = now - pos.opened_at
-                btc_open = btc_price.get_price_n_seconds_ago(int(age))
-                btc_close = btc_price.get_price_n_seconds_ago(int(max(0, age - 300)))
+                outcome = _outcome_from_prices(
+                    btc_price.get_price_n_seconds_ago(int(age)),
+                    btc_price.get_price_n_seconds_ago(int(max(0, age - 300))),
+                )
+                source = "exchange" if outcome else source
+            _outcome_last_poll.pop(pos.order_id, None)
 
-            if btc_open is not None and btc_close is not None:
-                btc_went_up = btc_close >= btc_open
+            if source in ("polymarket", "chainlink") and exch_outcome and exch_outcome != outcome:
+                log.warning(
+                    f"[模拟结算] {pos.order_id} 交易所价格判定={exch_outcome} 与 "
+                    f"{source} 结算={outcome} 不一致，以 {source} 为准"
+                )
+
+            if outcome is not None:
+                btc_went_up = outcome == "UP"
                 # side "YES" = bought Up token, side "NO" = bought Down token
                 won = (pos.side == "YES" and btc_went_up) or (pos.side == "NO" and not btc_went_up)
                 exit_price = 1.0 if won else 0.0
-                outcome_str = "UP" if btc_went_up else "DOWN"
+                outcome_str = f"{outcome}({source})"
                 result_str = "WIN" if won else "LOSS"
             else:
                 # Not enough price history — assume breakeven
@@ -899,15 +957,33 @@ async def resolve_expired_positions() -> None:
                 mode="模拟",
             )
         else:
+            # Polymarket's resolved outcome first — the last trade price (e.g.
+            # 0.97) is only an approximation of the 1.0/0.0 actually paid out.
+            live_outcome: Optional[str] = None
+            if session is not None and pos.market_end_ts > 0:
+                waited = now - pos.market_end_ts
+                last = _outcome_last_poll.get(pos.order_id, 0.0)
+                if now - last < _OUTCOME_POLL_INTERVAL and waited < PAPER_SETTLE_OUTCOME_WAIT_SECONDS:
+                    continue
+                _outcome_last_poll[pos.order_id] = now
+                live_outcome = await fetch_market_outcome(session, int(pos.market_end_ts - 300))
+                if live_outcome is None and waited < PAPER_SETTLE_OUTCOME_WAIT_SECONDS:
+                    continue   # not resolved yet — retry next poll
+            _outcome_last_poll.pop(pos.order_id, None)
             try:
-                client = await _get_clob_client()
-                # Query last trade price as proxy for settlement
-                trade = await client.get_last_trade_price(token_id=pos.token_id)
-                exit_price = float(trade.price) if trade and trade.price is not None else 0.5
+                if live_outcome is not None:
+                    won = (pos.side == "YES") == (live_outcome == "UP")
+                    exit_price = 1.0 if won else 0.0
+                else:
+                    log.warning(f"[实盘] {pos.order_id} 未取得 Polymarket 结算结果，按最新成交价记账")
+                    client = await _get_clob_client()
+                    trade = await client.get_last_trade_price(token_id=pos.token_id)
+                    exit_price = float(trade.price) if trade and trade.price is not None else 0.5
                 pnl = state.record_close(pos.market_id, exit_price)
                 log.info(
                     f"[实盘] 已平仓过期仓位 {pos.order_id} "
-                    f"@ {exit_price:.3f} 盈亏={pnl:+.4f}"
+                    f"@ {exit_price:.3f} 盈亏={pnl:+.4f} "
+                    f"(依据={'Polymarket结算 ' + live_outcome if live_outcome else '最新成交价'})"
                 )
                 await asyncio.get_event_loop().run_in_executor(
                     None, lambda: db.close_position(pos.order_id, exit_price, "SETTLE")
