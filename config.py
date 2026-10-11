@@ -53,6 +53,12 @@ PUSD_CONTRACT_ADDRESS: str = os.getenv(
 # ──────────────────────────────────────────────
 PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "true").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+# Comma-separated logger names to run at DEBUG while everything else stays at
+# LOG_LEVEL — e.g. "__main__" shows every skip reason in evaluate_market without
+# the rest of the DEBUG firehose. Empty = off.
+LOG_DEBUG_MODULES: list = [
+    m.strip() for m in os.getenv("LOG_DEBUG_MODULES", "").split(",") if m.strip()
+]
 
 # Dashboard "pause/resume trading" button (web/server.py's /api/trading/toggle)
 # is gated on this fixed password — new trade entries stop while paused, but

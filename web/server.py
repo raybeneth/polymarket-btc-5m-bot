@@ -283,7 +283,12 @@ class WebLogHandler(logging.Handler):
             msg = record.getMessage().strip()
             if not msg:
                 return
-            level = record.levelname[0]  # I/W/E
+            level = record.levelname[0]  # I/W/E/C
+            # getMessage() drops the traceback; keep at least the exception
+            # type + text so dashboard errors aren't just a bare summary line.
+            if record.exc_info and record.exc_info[1] is not None:
+                exc = record.exc_info[1]
+                msg = f"{msg} | {type(exc).__name__}: {exc}"
             line = f"{ts}  [{level}] {msg}"
             add_log_line(line)
             # Persist off the hot path — the writer thread does the DB insert.

@@ -1,21 +1,27 @@
 """
 Logging setup — coloured console output + plain bot.log file.
 
-MySQL (see storage/db.py) is the source of truth for position records and
+SQLite (see storage/db.py) is the source of truth for position records and
 stats. trades.jsonl / positions.log below are a local backup only, written
 alongside the DB writes, for manual inspection/debugging.
 """
 import json
 import logging
+import logging.handlers
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import colorlog
 
-from config import LOG_LEVEL, TRADE_LOG_FILE
+from config import LOG_LEVEL, LOG_DEBUG_MODULES, TRADE_LOG_FILE
 
 POSITION_LOG_FILE = "positions.log"
+ERROR_LOG_FILE = "errors.log"
+
+# Third-party loggers that log every request at INFO (httpx: one line per
+# CLOB call) — they drowned out real problems in the console and dashboard.
+_NOISY_LOGGERS = ("httpx", "httpcore", "websockets", "asyncio.selector_events")
 
 CST = timezone(timedelta(hours=8))
 
@@ -55,14 +61,37 @@ def setup_logging() -> None:
     root.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
     root.addHandler(handler)
 
-    # File handler (plain, no colours)
+    # File handlers (plain, no colours). Rotating so a long run — or a
+    # temporary LOG_DEBUG_MODULES session — can't fill the disk.
     file_formatter = logging.Formatter(
         "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
     )
     file_formatter.converter = _cst_converter
-    fh = logging.FileHandler("bot.log", encoding="utf-8")
+    fh = logging.handlers.RotatingFileHandler(
+        "bot.log", maxBytes=20 * 1024 * 1024, backupCount=5, encoding="utf-8",
+    )
     fh.setFormatter(file_formatter)
     root.addHandler(fh)
+
+    # WARNING+ only, with full tracebacks — the one place to look for
+    # problems without scrolling past routine INFO/DEBUG lines.
+    eh = logging.handlers.RotatingFileHandler(
+        ERROR_LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
+    eh.setLevel(logging.WARNING)
+    eh.setFormatter(file_formatter)
+    root.addHandler(eh)
+
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    for name in LOG_DEBUG_MODULES:
+        logging.getLogger(name).setLevel(logging.DEBUG)
+
+    # Unhandled exceptions in background tasks (feeds, scanner) otherwise
+    # surface only as a vague "Task exception was never retrieved" at GC time.
+    def _excepthook(exc_type, exc, tb):
+        logging.getLogger("unhandled").critical("未捕获异常", exc_info=(exc_type, exc, tb))
+    sys.excepthook = _excepthook
 
 
 def attach_web_logger() -> None:

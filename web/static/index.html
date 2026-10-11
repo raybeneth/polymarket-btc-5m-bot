@@ -698,6 +698,7 @@
   .log-line.exit-win   { color: var(--green); }
   .log-line.exit-loss  { color: var(--red); }
   .log-line.warn       { color: var(--yellow); }
+  .log-line.error      { color: var(--red); font-weight: 700; }
   .log-line.settle-win  { color: var(--green); }
   .log-line.settle-loss { color: var(--red); }
 
@@ -2114,6 +2115,7 @@ function render(d) {
     else if (line.includes('EXIT') && line.includes('pnl=-')) cls = 'exit-loss';
     else if (line.includes('SETTLE') && line.includes('WIN')) cls = 'settle-win';
     else if (line.includes('SETTLE') && line.includes('LOSS'))cls = 'settle-loss';
+    else if (line.includes('[E]') || line.includes('[C]'))    cls = 'error';
     else if (line.includes('[W]'))                             cls = 'warn';
     return `<div class="log-line ${cls}">${escHtml(line)}</div>`;
   }).join('');
