@@ -1,142 +1,123 @@
 """
-MySQL-backed position storage.
+SQLite-backed position storage.
 
 Single source of truth for trade records — replaces the old trades.jsonl /
 positions.log files. P&L and win/loss are computed by generated columns in
 SQL (see schema.sql), not hand-rolled in Python.
 
-All functions here are synchronous (PyMySQL + connection pool). Async callers
-must wrap them with `run_in_executor`, same pattern already used for the
-blocking py-clob-client calls in execution/order_manager.py.
+All functions here are synchronous (stdlib sqlite3). Async callers must wrap
+them with `run_in_executor`, same pattern already used for the blocking
+py-clob-client calls in execution/order_manager.py. Executor threads share
+one connection guarded by a lock; WAL mode lets a separate web_only.py
+process read the same file while the bot writes.
+
+Timestamps are stored as unix seconds (REAL, UTC).
 """
 import json
 import logging
 import os
-from datetime import datetime, timezone
+import sqlite3
+import threading
+import time
 from typing import Optional
 
-import pymysql
-import pymysql.cursors
-from dbutils.pooled_db import PooledDB
-
-from config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+from config import SQLITE_PATH
 from execution.risk import OpenPosition
 
 log = logging.getLogger(__name__)
 
 _SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
-_pool: Optional[PooledDB] = None
+_conn: Optional[sqlite3.Connection] = None
+_lock = threading.RLock()
 
 
-def _get_pool() -> PooledDB:
-    global _pool
-    if _pool is None:
-        _pool = PooledDB(
-            creator=pymysql,
-            maxconnections=8,
-            mincached=1,
-            blocking=True,
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE,
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=True,
+def _get_conn() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        parent = os.path.dirname(os.path.abspath(SQLITE_PATH))
+        os.makedirs(parent, exist_ok=True)
+        conn = sqlite3.connect(
+            SQLITE_PATH,
+            timeout=10,                 # wait on another process's write lock
+            check_same_thread=False,    # shared across executor threads (guarded by _lock)
+            isolation_level=None,       # autocommit, same as the old MySQL pool
         )
-    return _pool
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _conn = conn
+    return _conn
 
 
-def _to_dt(ts: float) -> Optional[datetime]:
-    """Unix timestamp -> naive UTC datetime (MySQL DATETIME has no tz)."""
-    if not ts:
-        return None
-    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+def _execute(sql: str, params: tuple = ()) -> sqlite3.Cursor:
+    with _lock:
+        return _get_conn().execute(sql, params)
 
 
-def _to_ts(dt: Optional[datetime]) -> float:
-    """Naive UTC datetime (as read back from MySQL) -> unix timestamp."""
-    if dt is None:
-        return 0.0
-    return dt.replace(tzinfo=timezone.utc).timestamp()
+def _fetchone(sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
+    with _lock:
+        return _get_conn().execute(sql, params).fetchone()
+
+
+def _fetchall(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+    with _lock:
+        return _get_conn().execute(sql, params).fetchall()
 
 
 def init_schema() -> None:
     """Create the positions + logs tables if missing. Call once at startup."""
     with open(_SCHEMA_PATH, "r", encoding="utf-8") as f:
         ddl = f.read()
-    cleaned = "\n".join(
-        line for line in ddl.splitlines() if not line.strip().startswith("--")
-    )
-    # schema.sql holds multiple CREATE TABLE statements; PyMySQL's execute runs
-    # one at a time, so split on ';' and run each non-empty statement.
-    statements = [s.strip() for s in cleaned.split(";") if s.strip()]
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            for stmt in statements:
-                cur.execute(stmt)
-    finally:
-        conn.close()
-    log.info("MySQL positions/logs 表已就绪")
+    with _lock:
+        _get_conn().executescript(ddl)
+    log.info(f"SQLite 表已就绪 ({SQLITE_PATH})")
 
 
 def insert_open(pos: OpenPosition, mode: str, usd_size: float,
                  combined_score: float, filter_scores: dict) -> None:
     """Insert a new OPEN position row."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO positions
-                    (order_id, market_id, token_id, side, mode, status,
-                     entry_price, shares, usd_size, combined_score, filter_scores,
-                     opened_at, market_end_ts)
-                VALUES
-                    (%s, %s, %s, %s, %s, 'OPEN',
-                     %s, %s, %s, %s, %s,
-                     %s, %s)
-                """,
-                (
-                    pos.order_id, pos.market_id, pos.token_id, pos.side, mode,
-                    pos.entry_price, pos.shares, usd_size, combined_score,
-                    json.dumps(filter_scores),
-                    _to_dt(pos.opened_at), _to_dt(pos.market_end_ts),
-                ),
-            )
-    finally:
-        conn.close()
+    _execute(
+        """
+        INSERT INTO positions
+            (order_id, market_id, token_id, side, mode, status,
+             entry_price, shares, usd_size, combined_score, filter_scores,
+             opened_at, market_end_ts)
+        VALUES
+            (?, ?, ?, ?, ?, 'OPEN',
+             ?, ?, ?, ?, ?,
+             ?, ?)
+        """,
+        (
+            pos.order_id, pos.market_id, pos.token_id, pos.side, mode,
+            pos.entry_price, pos.shares, usd_size, combined_score,
+            json.dumps(filter_scores),
+            pos.opened_at, pos.market_end_ts or None,
+        ),
+    )
 
 
 def close_position(order_id: str, exit_price: float, exit_reason: str) -> Optional[dict]:
     """
-    Mark a position CLOSED. MySQL's generated `pnl`/`result` columns compute
+    Mark a position CLOSED. SQLite's generated `pnl`/`result` columns compute
     the outcome — we just read them back.
 
     Returns {"pnl": float, "result": "WIN"|"LOSS"} or None if order_id unknown.
     """
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE positions
-                SET exit_price = %s, closed_at = UTC_TIMESTAMP(3),
-                    exit_reason = %s, status = 'CLOSED'
-                WHERE order_id = %s
-                """,
-                (exit_price, exit_reason, order_id),
-            )
-            cur.execute(
-                "SELECT pnl, result FROM positions WHERE order_id = %s",
-                (order_id,),
-            )
-            row = cur.fetchone()
-    finally:
-        conn.close()
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            """
+            UPDATE positions
+            SET exit_price = ?, closed_at = ?,
+                exit_reason = ?, status = 'CLOSED'
+            WHERE order_id = ?
+            """,
+            (exit_price, time.time(), exit_reason, order_id),
+        )
+        row = conn.execute(
+            "SELECT pnl, result FROM positions WHERE order_id = ?", (order_id,)
+        ).fetchone()
     if row is None or row["pnl"] is None:
         return None
     return {"pnl": float(row["pnl"]), "result": row["result"]}
@@ -147,38 +128,30 @@ def get_stats() -> dict:
     Aggregate historical + today's (UTC) trade stats, entirely via SQL.
     Shape matches the old utils.logger.load_position_history() return value.
     """
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            # "trades" counts every position ever opened (OPEN or CLOSED) —
-            # not just resolved ones — so a still-open position (e.g. restored
-            # after a restart) is reflected immediately instead of appearing
-            # as 0 until it settles. wins/losses/pnl are naturally NULL on
-            # open rows (see generated columns in schema.sql) so they don't
-            # need an extra status filter.
-            cur.execute(
-                """
-                SELECT COUNT(*) AS total_trades,
-                       COALESCE(SUM(result='WIN'), 0)  AS wins,
-                       COALESCE(SUM(result='LOSS'), 0) AS losses,
-                       COALESCE(SUM(pnl), 0) AS total_pnl
-                FROM positions
-                """
-            )
-            overall = cur.fetchone()
-            cur.execute(
-                """
-                SELECT COUNT(*) AS today_trades,
-                       COALESCE(SUM(result='WIN'), 0)  AS today_wins,
-                       COALESCE(SUM(result='LOSS'), 0) AS today_losses,
-                       COALESCE(SUM(pnl), 0) AS today_pnl
-                FROM positions
-                WHERE DATE(opened_at) = UTC_DATE()
-                """
-            )
-            today = cur.fetchone()
-    finally:
-        conn.close()
+    # "trades" counts every position ever opened (OPEN or CLOSED) — not just
+    # resolved ones — so a still-open position (e.g. restored after a restart)
+    # is reflected immediately instead of appearing as 0 until it settles.
+    # wins/losses/pnl are naturally NULL on open rows (see generated columns
+    # in schema.sql) so they don't need an extra status filter.
+    overall = _fetchone(
+        """
+        SELECT COUNT(*) AS total_trades,
+               COALESCE(SUM(result='WIN'), 0)  AS wins,
+               COALESCE(SUM(result='LOSS'), 0) AS losses,
+               COALESCE(SUM(pnl), 0) AS total_pnl
+        FROM positions
+        """
+    )
+    today = _fetchone(
+        """
+        SELECT COUNT(*) AS today_trades,
+               COALESCE(SUM(result='WIN'), 0)  AS today_wins,
+               COALESCE(SUM(result='LOSS'), 0) AS today_losses,
+               COALESCE(SUM(pnl), 0) AS today_pnl
+        FROM positions
+        WHERE date(opened_at, 'unixepoch') = date('now')
+        """
+    )
     return {
         "total_trades": int(overall["total_trades"]),
         "wins": int(overall["wins"]),
@@ -203,16 +176,10 @@ def get_recent_closed(limit: Optional[int] = 50) -> list[dict]:
         WHERE status='CLOSED'
         ORDER BY closed_at DESC
     """
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            if limit is None:
-                cur.execute(base_sql)
-            else:
-                cur.execute(base_sql + " LIMIT %s", (limit,))
-            rows = cur.fetchall()
-    finally:
-        conn.close()
+    if limit is None:
+        rows = _fetchall(base_sql)
+    else:
+        rows = _fetchall(base_sql + " LIMIT ?", (limit,))
 
     return [
         {
@@ -225,8 +192,8 @@ def get_recent_closed(limit: Optional[int] = 50) -> list[dict]:
             "pnl": float(row["pnl"]) if row["pnl"] is not None else 0.0,
             "result": row["result"],
             "exit_reason": row["exit_reason"],
-            "opened_at": _to_ts(row["opened_at"]),
-            "closed_at": _to_ts(row["closed_at"]),
+            "opened_at": float(row["opened_at"] or 0.0),
+            "closed_at": float(row["closed_at"] or 0.0),
         }
         for row in rows
     ]
@@ -234,44 +201,18 @@ def get_recent_closed(limit: Optional[int] = 50) -> list[dict]:
 
 def insert_log(ts: float, line: str) -> None:
     """Persist one dashboard log line (called from the web log-writer thread)."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO logs (ts, line) VALUES (%s, %s)",
-                (_to_dt(ts), line),
-            )
-    finally:
-        conn.close()
+    _execute("INSERT INTO logs (ts, line) VALUES (?, ?)", (ts, line))
 
 
 def get_recent_logs(limit: int = 200) -> list[str]:
     """Newest `limit` log lines, returned oldest-first for chronological display."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT line FROM logs ORDER BY id DESC LIMIT %s", (limit,)
-            )
-            rows = cur.fetchall()
-    finally:
-        conn.close()
+    rows = _fetchall("SELECT line FROM logs ORDER BY id DESC LIMIT ?", (limit,))
     return [row["line"] for row in reversed(rows)]
 
 
 def prune_logs(keep: int = 5000) -> None:
     """Delete all but the newest `keep` log rows to bound table growth."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT MAX(id) AS max_id FROM logs")
-            row = cur.fetchone()
-            max_id = row["max_id"] if row else None
-            if max_id is None:
-                return
-            cur.execute("DELETE FROM logs WHERE id <= %s", (max_id - keep,))
-    finally:
-        conn.close()
+    _execute("DELETE FROM logs WHERE id <= (SELECT MAX(id) FROM logs) - ?", (keep,))
 
 
 def insert_book_snapshot(order_id: str, side: str, entry_price: float,
@@ -282,57 +223,36 @@ def insert_book_snapshot(order_id: str, side: str, entry_price: float,
     """Persist one per-poll order-book snapshot for an OPEN position (see
     position_book_snapshots in schema.sql). Called every loop from
     check_early_exits — keep it a single cheap INSERT."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO position_book_snapshots
-                    (order_id, side, entry_price, stop_price, tp_price,
-                     best_bid, best_ask, spread, secs_to_expiry, triggered, ts)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (order_id, side, entry_price, stop_price, tp_price,
-                 best_bid, best_ask, spread, secs_to_expiry, triggered, _to_dt(ts)),
-            )
-    finally:
-        conn.close()
+    _execute(
+        """
+        INSERT INTO position_book_snapshots
+            (order_id, side, entry_price, stop_price, tp_price,
+             best_bid, best_ask, spread, secs_to_expiry, triggered, ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (order_id, side, entry_price, stop_price, tp_price,
+         best_bid, best_ask, spread, secs_to_expiry, triggered, ts),
+    )
 
 
 def prune_book_snapshots(keep: int = 50000) -> None:
     """Delete all but the newest `keep` snapshot rows to bound table growth."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT MAX(id) AS max_id FROM position_book_snapshots")
-            row = cur.fetchone()
-            max_id = row["max_id"] if row else None
-            if max_id is None:
-                return
-            cur.execute(
-                "DELETE FROM position_book_snapshots WHERE id <= %s",
-                (max_id - keep,),
-            )
-    finally:
-        conn.close()
+    _execute(
+        "DELETE FROM position_book_snapshots "
+        "WHERE id <= (SELECT MAX(id) FROM position_book_snapshots) - ?",
+        (keep,),
+    )
 
 
 def load_open_positions() -> list[OpenPosition]:
     """Reload still-OPEN positions on startup (crash/restart recovery)."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT order_id, market_id, token_id, side, entry_price, shares,
-                       usd_size, opened_at, market_end_ts
-                FROM positions WHERE status='OPEN'
-                """
-            )
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
+    rows = _fetchall(
+        """
+        SELECT order_id, market_id, token_id, side, entry_price, shares,
+               usd_size, opened_at, market_end_ts
+        FROM positions WHERE status='OPEN'
+        """
+    )
     return [
         OpenPosition(
             market_id=row["market_id"],
@@ -341,9 +261,9 @@ def load_open_positions() -> list[OpenPosition]:
             entry_price=float(row["entry_price"]),
             shares=float(row["shares"]),
             usd_size=float(row["usd_size"]),
-            opened_at=_to_ts(row["opened_at"]),
+            opened_at=float(row["opened_at"] or 0.0),
             order_id=row["order_id"],
-            market_end_ts=_to_ts(row["market_end_ts"]),
+            market_end_ts=float(row["market_end_ts"] or 0.0),
         )
         for row in rows
     ]
@@ -352,41 +272,28 @@ def load_open_positions() -> list[OpenPosition]:
 def get_or_init_balance(seed: float) -> float:
     """First-ever startup: seed the account balance from `seed`. After that,
     the DB row is authoritative — restarts don't reset it."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT balance FROM account_state WHERE id = 1")
-            row = cur.fetchone()
-            if row is not None:
-                return float(row["balance"])
-            cur.execute("INSERT INTO account_state (id, balance) VALUES (1, %s)", (seed,))
-            return seed
-    finally:
-        conn.close()
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute("SELECT balance FROM account_state WHERE id = 1").fetchone()
+        if row is not None:
+            return float(row["balance"])
+        conn.execute("INSERT INTO account_state (id, balance) VALUES (1, ?)", (seed,))
+        return seed
 
 
 def update_balance(balance: float) -> None:
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO account_state (id, balance) VALUES (1, %s) "
-                "ON DUPLICATE KEY UPDATE balance = %s",
-                (balance, balance),
-            )
-    finally:
-        conn.close()
+    _execute(
+        "INSERT INTO account_state (id, balance) VALUES (1, ?) "
+        "ON CONFLICT(id) DO UPDATE SET balance = excluded.balance, "
+        "updated_at = CURRENT_TIMESTAMP",
+        (balance,),
+    )
 
 
 def get_strategy_links() -> list[dict]:
     """Other running strategy instances for the dashboard nav menu."""
-    conn = _get_pool().connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT name, url FROM strategy_links "
-                "WHERE enabled = 1 ORDER BY sort_order ASC, id ASC"
-            )
-            return cur.fetchall()
-    finally:
-        conn.close()
+    rows = _fetchall(
+        "SELECT name, url FROM strategy_links "
+        "WHERE enabled = 1 ORDER BY sort_order ASC, id ASC"
+    )
+    return [dict(row) for row in rows]

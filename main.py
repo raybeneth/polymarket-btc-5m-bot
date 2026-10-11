@@ -581,7 +581,7 @@ async def main_loop() -> None:
         prior_logs = await loop.run_in_executor(None, db.get_recent_logs)
         if prior_logs:
             web_server.preload_logs(prior_logs)
-            log.info(f"已从 MySQL 恢复 {len(prior_logs)} 条历史日志")
+            log.info(f"已从 SQLite 恢复 {len(prior_logs)} 条历史日志")
     except Exception as exc:
         log.debug(f"历史日志加载失败: {exc}")
 
@@ -608,7 +608,7 @@ async def main_loop() -> None:
     # Restore any positions still OPEN in the DB (e.g. after a restart)
     state.open_positions = await loop.run_in_executor(None, db.load_open_positions)
     if state.open_positions:
-        log.info(f"已从 MySQL 恢复 {len(state.open_positions)} 个未平仓仓位")
+        log.info(f"已从 SQLite 恢复 {len(state.open_positions)} 个未平仓仓位")
 
     _recent_closed = await loop.run_in_executor(None, db.get_recent_closed, None)
 

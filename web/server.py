@@ -45,7 +45,7 @@ _trading_paused: bool = False
 def is_trading_paused() -> bool:
     return _trading_paused
 
-# Log lines are persisted to MySQL off the hot path: emit() enqueues here and a
+# Log lines are persisted to SQLite off the hot path: emit() enqueues here and a
 # daemon thread drains it, so a slow/unavailable DB never blocks the event loop
 # or the logging caller.
 _log_db_queue: "queue.Queue[tuple[float, str]]" = queue.Queue()
@@ -65,7 +65,7 @@ def add_log_line(line: str) -> None:
 
 def preload_logs(lines: list[str]) -> None:
     """
-    Seed the in-memory buffer with historical log lines loaded from MySQL on
+    Seed the in-memory buffer with historical log lines loaded from SQLite on
     startup. Prepended ahead of any live lines already emitted this run so the
     dashboard shows a continuous history across restarts.
     """
@@ -74,7 +74,7 @@ def preload_logs(lines: list[str]) -> None:
 
 
 def _log_writer_loop() -> None:
-    """Daemon thread: persist queued log lines to MySQL, pruning periodically."""
+    """Daemon thread: persist queued log lines to SQLite, pruning periodically."""
     from storage import db
     n = 0
     while True:
@@ -201,7 +201,7 @@ async def _handle_api_state(request: web.Request) -> web.Response:
 
 async def _handle_api_strategy_links(request: web.Request) -> web.Response:
     """Other running strategy instances (name + URL) for the dashboard nav menu.
-    Configured directly in the strategy_links MySQL table — no admin UI."""
+    Configured directly in the strategy_links SQLite table — no admin UI."""
     from storage import db
     loop = asyncio.get_event_loop()
     links = await loop.run_in_executor(None, db.get_strategy_links)
@@ -301,7 +301,7 @@ class WebLogHandler(logging.Handler):
 
 async def start_web_server() -> None:
     """Start aiohttp web server as a background task in the running event loop."""
-    _start_log_writer()  # begin persisting dashboard log lines to MySQL
+    _start_log_writer()  # begin persisting dashboard log lines to SQLite
     app = web.Application()
     app.router.add_get("/", _handle_index)
     app.router.add_get("/avatar.png", _handle_avatar)

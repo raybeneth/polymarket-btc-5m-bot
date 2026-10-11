@@ -43,7 +43,7 @@ class RiskState:
     trades_today: int = 0
     wins_today: int = 0
     losses_today: int = 0
-    balance: float = 0.0  # paper-mode virtual account balance; synced from/to MySQL by callers
+    balance: float = 0.0  # paper-mode virtual account balance; synced from/to SQLite by callers
 
     def _refresh_day(self) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

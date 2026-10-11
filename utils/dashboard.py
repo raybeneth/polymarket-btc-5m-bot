@@ -55,7 +55,7 @@ class Dashboard:
         self._positions: list = []
         self._logs: deque = deque(maxlen=_MAX_LOG_LINES)
 
-        # Historical stats (loaded once from MySQL via storage.db.get_stats)
+        # Historical stats (loaded once from SQLite via storage.db.get_stats)
         self._hist_total_trades: int = 0
         self._hist_wins: int = 0
         self._hist_losses: int = 0

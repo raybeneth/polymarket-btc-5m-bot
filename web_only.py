@@ -1,7 +1,7 @@
 """
 Standalone web dashboard — no trading, just monitoring.
 
-Reads historical data from MySQL and serves the dashboard.
+Reads historical data from SQLite and serves the dashboard.
 Useful for reviewing past performance without running the bot.
 
 Usage: python web_only.py

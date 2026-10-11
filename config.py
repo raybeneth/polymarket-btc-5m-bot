@@ -73,13 +73,11 @@ TOTAL_DEPOSITS_USD: float = float(os.getenv("TOTAL_DEPOSITS_USD", "0.0"))
 
 
 # ──────────────────────────────────────────────
-# MYSQL — position storage
+# SQLITE — position storage
 # ──────────────────────────────────────────────
-MYSQL_HOST: str = os.getenv("MYSQL_HOST", "156.233.234.116")
-MYSQL_PORT: int = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "mysql_jpdBm6")
-MYSQL_DATABASE: str = os.getenv("MYSQL_DATABASE", "polymarket_bot_test")
+# Database file path. Relative paths resolve against the working directory
+# (/data in Docker, which is the mounted ./data volume).
+SQLITE_PATH: str = os.getenv("SQLITE_PATH", "polymarket_bot.db")
 
 # BTC spot price feed source. Binance WS can return HTTP 451 (geo-blocked)
 # depending on the server's region — switch source via env var, no code change.
@@ -92,7 +90,7 @@ BTC_PRICE_SOURCE: str = os.getenv("BTC_PRICE_SOURCE", "binance").lower()
 # HTTP_PROXY/HTTPS_PROXY entirely, even if configured in the environment.
 PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "true").lower() == "true"
 
-# Local file backup of trade/position records (MySQL is the source of truth
+# Local file backup of trade/position records (SQLite is the source of truth
 # for stats/PnL; these files are kept only for manual inspection/debugging).
 TRADE_LOG_FILE: str = "trades.jsonl"
 
