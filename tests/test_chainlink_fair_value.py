@@ -62,6 +62,16 @@ def test_prob_up_symmetry_and_direction():
     assert fair_value.prob_up(100.0, 100.0, sigma, 0) == 1.0
 
 
+def test_realised_vol_keeps_same_timestamp_moves():
+    # 3 trades per second, price walks 0.1% between seconds — the intra-second
+    # duplicates must not hide the per-second move.
+    pts = []
+    for sec in range(10):
+        px = 100.0 * math.exp(0.001 * (-1) ** sec)
+        pts += [(sec + 0.001, px), (sec + 0.001, px), (sec + 0.5, px)]
+    assert fair_value.realised_vol_per_s(pts) == pytest.approx(0.002, rel=1e-6)
+
+
 def test_realised_vol():
     pts = [(i, 100.0 * math.exp(0.001 * (-1) ** i)) for i in range(11)]
     assert fair_value.realised_vol_per_s(pts) == pytest.approx(0.002, rel=1e-6)

@@ -45,7 +45,16 @@ def _norm_cdf(x: float) -> float:
 
 
 def realised_vol_per_s(prices: list[tuple[float, float]]) -> Optional[float]:
-    """σ per √second from (ts, price) samples: sqrt(Σ r² / Σ Δt)."""
+    """
+    σ per √second from (ts, price) samples: sqrt(Σ r² / Σ Δt), measured on a
+    1-second grid (last price in each second). Exchange feeds print many
+    trades in the same millisecond; differencing raw ticks and skipping the
+    Δt=0 pairs silently dropped those moves and understated σ.
+    """
+    grid: dict[int, float] = {}
+    for t, p in prices:
+        grid[int(t)] = p
+    prices = sorted(grid.items())
     if len(prices) < 3:
         return None
     sq, span = 0.0, 0.0
