@@ -363,6 +363,7 @@ ENTRY_BTC_DECEL_RATIO: float = 0.40          # 20s rate / 60s rate < 40% → mom
 ENTRY_FLAT_CONFIRM_TICKS: int = 3            # condition A/B must hold on this many CONSECUTIVE ~2s checks before firing (resets on any failed check)
 ENTRY_MAX_WAIT_SECONDS: float = 60.0         # hard ceiling: enter regardless after this many s
 ENTRY_CONFIRM_MAX_ADVERSE_PCT: float = 0.015  # cancel if token price fell >1.5% from signal
+ADVERSE_CONFIRM_MIN_TICKS: int = 2            # ...but never on a drop smaller than this many ticks (1.5% < 1 tick above ~0.67)
 
 # NOTE: the consecutive-loss circuit breaker (docs/optimizations/012) was removed
 # on 2026-07-25. It never fired once in production: entries average ~138 minutes

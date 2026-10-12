@@ -43,6 +43,7 @@ from config import (
     ENTRY_FLAT_CONFIRM_TICKS,
     ENTRY_MAX_WAIT_SECONDS,
     ENTRY_CONFIRM_MAX_ADVERSE_PCT,
+    ADVERSE_CONFIRM_MIN_TICKS,
     TIMING_MIN_REMAINING,
     TOTAL_DEPOSITS_USD,
     FAIR_VALUE_MODE,
@@ -166,6 +167,46 @@ def _fair_value_blocks(fv, mid: str, stage: str) -> bool:
     return False
 
 
+def adverse_threshold(price: float, tick_size) -> float:
+    """
+    Adverse-move cancel threshold as a fraction of the signal price — at
+    least ADVERSE_CONFIRM_MIN_TICKS ticks. The flat 1.5% was smaller than one
+    0.01 tick for any price above ~0.67, so a single ask flicker cancelled
+    every signal (2026-10-12: 3/3 signals cancelled within 2s).
+    """
+    try:
+        tick = float(tick_size) if tick_size else 0.01
+    except (TypeError, ValueError):
+        tick = 0.01
+    if price <= 0:
+        return ENTRY_CONFIRM_MAX_ADVERSE_PCT
+    return max(ENTRY_CONFIRM_MAX_ADVERSE_PCT, ADVERSE_CONFIRM_MIN_TICKS * tick / price)
+
+
+def _adverse_cancel(market, side: str, original_price: float, current_price: float,
+                    tick_size, mid: str, waited: float) -> bool:
+    """True if the pending signal should be cancelled for an adverse token move."""
+    price_chg_pct = (current_price - original_price) / original_price
+    if price_chg_pct >= -adverse_threshold(original_price, tick_size):
+        return False
+    # In gate mode a cheaper ask is a better entry as long as fair value still
+    # supports it — only cancel once the re-checked edge falls below the floor.
+    if FAIR_VALUE_MODE == "gate":
+        fv = fair_value.check(market.end_timestamp, side, current_price)
+        edge = fv.details.get("edge") if fv.passed else None
+        if edge is not None and edge >= FAIR_VALUE_MIN_EDGE:
+            log.info(
+                f"[{mid}] 逆向保留 ({waited:.0f}s): 代币价格 {price_chg_pct:+.1%} "
+                f"但 edge {edge:+.3f} ≥ {FAIR_VALUE_MIN_EDGE:.3f}，继续等待"
+            )
+            return False
+    log.info(
+        f"[{mid}] 逆向取消 ({waited:.0f}s): 代币价格 {price_chg_pct:+.1%} "
+        f"(信号={original_price:.3f} 现={current_price:.3f})"
+    )
+    return True
+
+
 async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     """Run the complete filter pipeline for one market."""
     market_id = market.market_id
@@ -214,13 +255,10 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
 
         price_chg_pct = (current_price - original_price) / original_price
 
-        # Token price adverse move → cancel immediately regardless of BTC state
-        if price_chg_pct < -ENTRY_CONFIRM_MAX_ADVERSE_PCT:
+        # Token price adverse move → cancel, unless the drop is tick noise or
+        # (gate mode) the cheaper ask still clears the fair-value edge floor.
+        if _adverse_cancel(market, side2, original_price, current_price, book2.tick_size, mid, waited):
             del _pending_signals[market_id]
-            log.info(
-                f"[{mid}] 逆向取消 ({waited:.0f}s): 代币价格 {price_chg_pct:+.1%} "
-                f"(信号={original_price:.3f} 现={current_price:.3f})"
-            )
             return
 
         # Momentum check + hard ceiling. A single passing check is no longer
@@ -437,7 +475,6 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
     else:
         trade_size = TRADE_SIZE_USD * TRADE_SIZE_LOW_TIER_RATIO  # 25%
         tier = "LOW"
-    direction.record_skip(tier.lower())
 
     # Reversal guard — last-look freshness check right before order placement.
     # Distinct from the 60s consistency window above: this only asks "has price
@@ -452,6 +489,9 @@ async def evaluate_market(session: aiohttp.ClientSession, market) -> None:
             f"threshold={rev_details.get('threshold_pct')}%"
         )
         return
+    # Counted only once the signal survives the reversal guard — counting it
+    # before let blocked signals show up as 成交 in the funnel report.
+    direction.record_skip(tier.lower())
 
     # TRADE SIGNAL
     token_id = market.yes_token_id if side == "YES" else market.no_token_id
